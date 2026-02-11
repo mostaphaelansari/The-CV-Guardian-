@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CV Shield — Malicious Resume Filter</title>
+  <meta name="description" content="Upload and analyse CV/resume PDFs for embedded malware, suspicious links, and other security threats." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ─── Ambient background blobs ─── -->
+  <div class="bg-blob blob-1"></div>
+  <div class="bg-blob blob-2"></div>
+  <div class="bg-blob blob-3"></div>
+
+  <div class="app-container">
+
+    <!-- ════════════════ SIDEBAR ════════════════ -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <div class="logo-icon">🛡️</div>
+          <div>
+            <h1 class="logo-text">CV Shield</h1>
+            <p class="logo-sub">Threat Detection</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <h3 class="sidebar-title">Analysis History</h3>
+        <div id="historyList" class="history-list">
+          <div class="history-empty">
+            <span class="history-empty-icon">📋</span>
+            <p>No analyses yet</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="stat-row">
+          <span class="stat-label">Total Scanned</span>
+          <span class="stat-value" id="totalScanned">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Threats Found</span>
+          <span class="stat-value stat-danger" id="totalThreats">0</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ════════════════ MAIN ════════════════ -->
+    <main class="main-content">
+
+      <!-- ── Header ── -->
+      <header class="main-header">
+        <button class="menu-toggle" id="menuToggle" aria-label="Toggle sidebar">
+          <span></span><span></span><span></span>
+        </button>
+        <div>
+          <h2 class="page-title">Analyse Resume</h2>
+          <p class="page-subtitle">Upload a CV/resume PDF to scan for threats</p>
+        </div>
+        <div class="header-badge">
+          <span class="pulse-dot"></span>
+          Real-time Analysis
+        </div>
+      </header>
+
+      <!-- ── Upload Zone ── -->
+      <section class="upload-section" id="uploadSection">
+        <div class="upload-zone" id="uploadZone">
+          <div class="upload-zone-inner">
+            <div class="upload-icon">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="12" y1="18" x2="12" y2="12"/>
+                <polyline points="9 15 12 12 15 15"/>
+              </svg>
+            </div>
+            <h3 class="upload-title">Drag & drop your PDF here</h3>
+            <p class="upload-subtitle">or click to browse files</p>
+            <p class="upload-hint">PDF only • Max 10 MB</p>
+            <input type="file" id="fileInput" accept=".pdf,application/pdf" hidden />
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Progress bar (hidden by default) ── -->
+      <section class="progress-section hidden" id="progressSection">
+        <div class="progress-card">
+          <div class="progress-header">
+            <div class="spinner"></div>
+            <span class="progress-text" id="progressText">Analysing PDF…</span>
+          </div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="progressBar"></div>
+          </div>
+          <div class="progress-steps" id="progressSteps">
+            <span class="step active">Upload</span>
+            <span class="step">Parse</span>
+            <span class="step">JS Check</span>
+            <span class="step">URL Scan</span>
+            <span class="step">Objects</span>
+            <span class="step">Metadata</span>
+            <span class="step">Report</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Results (hidden by default) ── -->
+      <section class="results-section hidden" id="resultsSection">
+
+        <!-- Score card -->
+        <div class="results-grid">
+          <div class="score-card glass-card" id="scoreCard">
+            <div class="score-gauge-wrapper">
+              <svg class="score-gauge" viewBox="0 0 120 120">
+                <circle class="gauge-bg" cx="60" cy="60" r="52" />
+                <circle class="gauge-fill" cx="60" cy="60" r="52" id="gaugeFill" />
+              </svg>
+              <div class="score-value" id="scoreValue">0</div>
+            </div>
+            <div class="score-label" id="scoreLabel">Analysing…</div>
+            <div class="risk-badge" id="riskBadge">—</div>
+          </div>
+
+          <!-- File info card -->
+          <div class="info-card glass-card">
+            <h3 class="card-title">📄 File Info</h3>
+            <div class="info-grid" id="fileInfo"></div>
+          </div>
+
+          <!-- Summary card -->
+          <div class="summary-card glass-card">
+            <h3 class="card-title">📝 Summary</h3>
+            <p class="summary-text" id="summaryText"></p>
+            <div class="recommendations" id="recommendations"></div>
+          </div>
+        </div>
+
+        <!-- Findings table -->
+        <div class="findings-card glass-card" id="findingsCard">
+          <div class="findings-header">
+            <h3 class="card-title">🔍 Detailed Findings</h3>
+            <div class="findings-count" id="findingsCount">0 findings</div>
+          </div>
+          <div class="findings-body" id="findingsBody">
+            <p class="no-findings">✅ No threats detected</p>
+          </div>
+        </div>
+
+        <!-- New scan button -->
+        <button class="btn btn-new-scan" id="newScanBtn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+          </svg>
+          Scan Another PDF
+        </button>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
