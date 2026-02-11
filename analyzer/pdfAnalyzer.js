@@ -46,6 +46,67 @@ class PDFAnalyzer {
       'wire transfer',
       'pay the ransom'
     ];
+
+    // ── SQL Injection patterns ──
+    this.sqlInjectionPatterns = [
+      { pattern: /'\s*OR\s+'[^']*'\s*=\s*'[^']*'/gi, label: 'SQL tautology injection (\' OR \'x\'=\'x)' },
+      { pattern: /'\s*OR\s+\d+\s*=\s*\d+/gi, label: 'SQL tautology injection (\' OR 1=1)' },
+      { pattern: /UNION\s+SELECT/gi, label: 'UNION SELECT injection' },
+      { pattern: /DROP\s+TABLE/gi, label: 'DROP TABLE injection' },
+      { pattern: /INSERT\s+INTO/gi, label: 'INSERT INTO injection' },
+      { pattern: /DELETE\s+FROM/gi, label: 'DELETE FROM injection' },
+      { pattern: /;\s*--/g, label: 'SQL comment termination' },
+      { pattern: /--\s+\w/g, label: 'SQL line comment' },
+      { pattern: /\/\*.*?\*\//gs, label: 'SQL block comment' },
+      { pattern: /EXEC\s*\(/gi, label: 'EXEC() call' },
+      { pattern: /xp_cmdshell/gi, label: 'xp_cmdshell execution' },
+      { pattern: /WAITFOR\s+DELAY/gi, label: 'SQL time-based injection (WAITFOR)' },
+      { pattern: /BENCHMARK\s*\(/gi, label: 'SQL time-based injection (BENCHMARK)' }
+    ];
+
+    // ── XSS / HTML Injection patterns ──
+    this.xssPatterns = [
+      { pattern: /<script[^>]*>/gi, label: '<script> tag' },
+      { pattern: /<\/script>/gi, label: '</script> closing tag' },
+      { pattern: /<svg[^>]*\s+onload\s*=/gi, label: '<svg onload=> event handler' },
+      { pattern: /<img[^>]*\s+onerror\s*=/gi, label: '<img onerror=> event handler' },
+      { pattern: /on(load|error|click|mouseover|focus|blur)\s*=\s*["']?[^"'\s>]+/gi, label: 'Inline event handler attribute' },
+      { pattern: /javascript\s*:/gi, label: 'javascript: URI scheme' },
+      { pattern: /data\s*:\s*text\/html/gi, label: 'data:text/html URI' },
+      { pattern: /<iframe[^>]*>/gi, label: '<iframe> tag' },
+      { pattern: /<object[^>]*>/gi, label: '<object> tag' },
+      { pattern: /<embed[^>]*>/gi, label: '<embed> tag' },
+      { pattern: /expression\s*\(/gi, label: 'CSS expression() injection' },
+      { pattern: /document\.cookie/gi, label: 'document.cookie access' },
+      { pattern: /document\.location/gi, label: 'document.location access' },
+      { pattern: /window\.location/gi, label: 'window.location access' }
+    ];
+
+    // ── Command Injection patterns ──
+    this.commandInjectionPatterns = [
+      { pattern: /rm\s+-rf\s+\//g, label: 'rm -rf / (destructive command)' },
+      { pattern: /cmd\.exe\s+\/c/gi, label: 'cmd.exe /c (Windows command execution)' },
+      { pattern: /\|\s*(cat|ls|dir|whoami|id|passwd|shadow)\b/gi, label: 'Pipe to system command' },
+      { pattern: /;\s*(wget|curl|nc|netcat|bash|sh|python|perl|ruby)\b/gi, label: 'Chained shell command' },
+      { pattern: /&&\s*(wget|curl|rm|chmod|chown|mkfs)\b/gi, label: 'Chained destructive command' },
+      { pattern: /\$\(.*\)/g, label: 'Command substitution $()' },
+      { pattern: /`[^`]*`/g, label: 'Backtick command substitution' },
+      { pattern: /\/etc\/(passwd|shadow|hosts)/g, label: 'Sensitive file path reference' },
+      { pattern: /\bnet\s+user\b/gi, label: 'Windows net user command' },
+      { pattern: /\breg\s+(add|delete|query)\b/gi, label: 'Windows registry command' }
+    ];
+
+    // ── Prompt Injection patterns ──
+    this.promptInjectionPatterns = [
+      { pattern: /ignore\s+(all\s+)?previous\s+instructions/gi, label: 'Prompt injection: ignore previous instructions' },
+      { pattern: /reveal\s+(the\s+)?(system\s+)?prompt/gi, label: 'Prompt injection: reveal system prompt' },
+      { pattern: /disregard\s+(all\s+)?(prior|previous|above)/gi, label: 'Prompt injection: disregard prior instructions' },
+      { pattern: /you\s+are\s+now\s+(a|an|the)/gi, label: 'Prompt injection: role override' },
+      { pattern: /new\s+instructions?\s*:/gi, label: 'Prompt injection: new instructions directive' },
+      { pattern: /act\s+as\s+(a|an|if)/gi, label: 'Prompt injection: act-as directive' },
+      { pattern: /forget\s+(everything|all|your)/gi, label: 'Prompt injection: forget directive' },
+      { pattern: /override\s+(previous|safety|security)/gi, label: 'Prompt injection: override directive' }
+    ];
   }
 
   /**
@@ -77,7 +138,7 @@ class PDFAnalyzer {
       const rawText = pdfData.text || '';
       const rawBuffer = fileBuffer.toString('latin1');   // raw bytes as string for pattern scanning
 
-      // ── Run all 7 checks ──
+      // ── Run all 10 checks ──
       this._checkJavaScript(rawBuffer, report);
       this._checkSuspiciousURLs(rawText, rawBuffer, report);
       this._checkEmbeddedObjects(rawBuffer, report);
@@ -85,6 +146,9 @@ class PDFAnalyzer {
       this._checkObfuscation(rawBuffer, report);
       this._checkContentHeuristics(rawText, report);
       this._checkStructure(fileBuffer, pdfData, report);
+      this._checkInjectionPatterns(rawText, report);
+      this._checkEncodedPayloads(rawText, report);
+      this._checkUnicodeObfuscation(rawText, report);
 
     } catch (err) {
       report.findings.push({
@@ -109,13 +173,13 @@ class PDFAnalyzer {
    * ────────────────────────────────────────────── */
   _checkJavaScript(raw, report) {
     const jsPatterns = [
-      { pattern: /\/JavaScript/gi,  label: '/JavaScript action' },
-      { pattern: /\/JS\s/gi,       label: '/JS action' },
-      { pattern: /eval\s*\(/gi,    label: 'eval() call' },
-      { pattern: /app\.\w+/gi,     label: 'Acrobat app object reference' },
+      { pattern: /\/JavaScript/gi, label: '/JavaScript action' },
+      { pattern: /\/JS\s/gi, label: '/JS action' },
+      { pattern: /eval\s*\(/gi, label: 'eval() call' },
+      { pattern: /app\.\w+/gi, label: 'Acrobat app object reference' },
       { pattern: /this\.submitForm/gi, label: 'submitForm call' },
       { pattern: /this\.exportDataObject/gi, label: 'exportDataObject call' },
-      { pattern: /util\.printf/gi,  label: 'util.printf (potential heap spray)' },
+      { pattern: /util\.printf/gi, label: 'util.printf (potential heap spray)' },
       { pattern: /String\.fromCharCode/gi, label: 'String.fromCharCode (potential obfuscation)' }
     ];
 
@@ -402,6 +466,143 @@ class PDFAnalyzer {
   }
 
   /* ─────────────────────────────────────────────
+   * CHECK 8 – Injection Pattern Detection
+   * ────────────────────────────────────────────── */
+  _checkInjectionPatterns(text, report) {
+    const categories = [
+      { name: 'SQL Injection', patterns: this.sqlInjectionPatterns },
+      { name: 'XSS / HTML Injection', patterns: this.xssPatterns },
+      { name: 'Command Injection', patterns: this.commandInjectionPatterns },
+      { name: 'Prompt Injection', patterns: this.promptInjectionPatterns }
+    ];
+
+    let categoriesHit = 0;
+
+    for (const { name, patterns } of categories) {
+      let categoryFindings = 0;
+      for (const { pattern, label } of patterns) {
+        // Reset regex lastIndex for global patterns
+        pattern.lastIndex = 0;
+        const matches = text.match(pattern);
+        if (matches && matches.length > 0) {
+          report.findings.push({
+            check: 'Injection Detection',
+            severity: 'high',
+            message: `${name}: ${label} (${matches.length}× found)`,
+            count: matches.length,
+            category: name
+          });
+          categoryFindings++;
+        }
+      }
+      if (categoryFindings > 0) categoriesHit++;
+    }
+
+    if (categoriesHit > 0) {
+      report.score += Math.min(categoriesHit * 10, 35);
+    }
+  }
+
+  /* ─────────────────────────────────────────────
+   * CHECK 9 – Encoded Payload Detection
+   * ────────────────────────────────────────────── */
+  _checkEncodedPayloads(text, report) {
+    let findings = 0;
+
+    // Detect base64-encoded strings (minimum 20 chars to avoid false positives)
+    const base64Regex = /[A-Za-z0-9+/]{20,}={0,2}/g;
+    const b64Matches = text.match(base64Regex) || [];
+
+    for (const match of b64Matches) {
+      try {
+        const decoded = Buffer.from(match, 'base64').toString('utf-8');
+        // Check if decoded content contains recognisable attack patterns
+        const dangerousDecoded = [
+          /<script/i, /SELECT\s/i, /DROP\s/i, /cmd\.exe/i,
+          /\/bin\/sh/i, /eval\s*\(/i, /rm\s+-rf/i, /powershell/i,
+          /<svg/i, /<iframe/i, /javascript:/i, /onerror\s*=/i
+        ];
+        for (const dp of dangerousDecoded) {
+          if (dp.test(decoded)) {
+            report.findings.push({
+              check: 'Encoded Payload',
+              severity: 'high',
+              message: `Base64-encoded attack payload detected — decodes to suspicious content: "${decoded.substring(0, 60)}…"`,
+              category: 'Encoded Payload'
+            });
+            findings++;
+            break;
+          }
+        }
+      } catch { /* not valid base64 – ignore */ }
+    }
+
+    // Also flag high number of base64-like strings
+    if (b64Matches.length > 3) {
+      report.findings.push({
+        check: 'Encoded Payload',
+        severity: 'medium',
+        message: `${b64Matches.length} base64-encoded strings found in CV text — unusual for a resume`,
+        category: 'Encoded Payload'
+      });
+      findings++;
+    }
+
+    if (findings > 0) {
+      report.score += Math.min(findings * 10, 20);
+    }
+  }
+
+  /* ─────────────────────────────────────────────
+   * CHECK 10 – Unicode Obfuscation Detection
+   * ────────────────────────────────────────────── */
+  _checkUnicodeObfuscation(text, report) {
+    // Detect fullwidth Unicode characters (U+FF01–U+FF5E)
+    const fullwidthRegex = /[\uFF01-\uFF5E]{2,}/g;
+    const fwMatches = text.match(fullwidthRegex) || [];
+
+    if (fwMatches.length === 0) return;
+
+    // Normalize fullwidth → ASCII and check for injection patterns
+    const normalised = text.replace(/[\uFF01-\uFF5E]/g, ch =>
+      String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)
+    );
+
+    const obfuscatedInjections = [
+      { pattern: /UNION\s+SELECT/gi, label: 'UNION SELECT (Unicode-obfuscated)' },
+      { pattern: /DROP\s+TABLE/gi, label: 'DROP TABLE (Unicode-obfuscated)' },
+      { pattern: /SELECT\s+FROM/gi, label: 'SELECT FROM (Unicode-obfuscated)' },
+      { pattern: /<script/gi, label: '<script> (Unicode-obfuscated)' },
+      { pattern: /rm\s+-rf/gi, label: 'rm -rf (Unicode-obfuscated)' },
+      { pattern: /cmd\.exe/gi, label: 'cmd.exe (Unicode-obfuscated)' }
+    ];
+
+    let found = false;
+    for (const { pattern, label } of obfuscatedInjections) {
+      if (pattern.test(normalised)) {
+        report.findings.push({
+          check: 'Unicode Obfuscation',
+          severity: 'high',
+          message: `Obfuscated attack pattern detected via fullwidth Unicode: ${label}`,
+          category: 'Unicode Obfuscation'
+        });
+        found = true;
+      }
+    }
+
+    if (!found && fwMatches.length > 0) {
+      report.findings.push({
+        check: 'Unicode Obfuscation',
+        severity: 'medium',
+        message: `${fwMatches.length} fullwidth Unicode sequences found — may be used to evade text-based filters`,
+        category: 'Unicode Obfuscation'
+      });
+    }
+
+    report.score += found ? 15 : 5;
+  }
+
+  /* ─────────────────────────────────────────────
    * Helpers
    * ────────────────────────────────────────────── */
   _extractMetadata(pdfData) {
@@ -419,7 +620,7 @@ class PDFAnalyzer {
   }
 
   _riskLevel(score) {
-    if (score <= 5)  return 'safe';
+    if (score <= 5) return 'safe';
     if (score <= 20) return 'low';
     if (score <= 45) return 'medium';
     if (score <= 70) return 'high';
@@ -463,6 +664,15 @@ class PDFAnalyzer {
     }
     if (checks.has('Content Heuristics')) {
       recs.push('📝 Review the text content carefully — contains social engineering language.');
+    }
+    if (checks.has('Injection Detection')) {
+      recs.push('💉 CV contains code-injection patterns (SQL/XSS/command/prompt). Treat as hostile input — do NOT process through any automated pipelines without sanitisation.');
+    }
+    if (checks.has('Encoded Payload')) {
+      recs.push('🔐 Base64-encoded or obfuscated payloads detected. Decoded content may contain executable attack code.');
+    }
+    if (checks.has('Unicode Obfuscation')) {
+      recs.push('🔤 Fullwidth Unicode obfuscation detected — attacker may be trying to bypass text-based security filters.');
     }
     if (report.riskLevel === 'safe') {
       recs.push('✅ No immediate threats detected. Standard resume processing can proceed.');
