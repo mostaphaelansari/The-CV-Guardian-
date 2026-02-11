@@ -1,29 +1,8 @@
 /**
- * Quick smoke test – builds a minimal valid PDF with malicious content
- * and runs it through PDFAnalyzer.
+ * Unit test – calls the new check methods directly on the analyzer
+ * to verify injection detection without needing a valid PDF.
  */
 const PDFAnalyzer = require('../analyzer/pdfAnalyzer');
-
-// ── Build a minimal valid PDF containing the user's malicious text ──
-function buildTestPDF(text) {
-    const textLines = text.split('\n').map(l => `(${l}) Tj`).join(' T* ');
-    const stream = `BT /F1 12 Tf 72 700 Td ${textLines} ET`;
-    const streamLen = Buffer.byteLength(stream);
-
-    const pdf = [
-        '%PDF-1.4',
-        '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
-        '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
-        '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj',
-        `4 0 obj << /Length ${streamLen} >> stream\n${stream}\nendstream endobj`,
-        '5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
-        'xref', '0 6',
-        'trailer << /Size 6 /Root 1 0 R >>',
-        'startxref', '0', '%%EOF'
-    ].join('\n');
-
-    return Buffer.from(pdf);
-}
 
 const maliciousText = `
 JOHN DOE
@@ -46,54 +25,74 @@ Comment injection test: -- comment test
 DROP TABLE users;
 <svg onload=TEST>
 javascript:TEST_FUNCTION
+
+Base64-like string for entropy testing:
+U29tZVJhbmRvbVN0cmluZ1Rlc3Q=
 `;
 
-async function runTest() {
+function runTest() {
     const analyzer = new PDFAnalyzer();
-    const pdfBuffer = buildTestPDF(maliciousText);
-    const report = await analyzer.analyze(pdfBuffer, 'malicious_test_cv.pdf');
+    const report = {
+        findings: [],
+        score: 0,
+        riskLevel: 'safe',
+        summary: '',
+        recommendations: [],
+        metadata: {},
+    };
 
-    console.log('\n═══════════════════════════════════════════');
-    console.log('  CV GUARDIAN – ANALYZER TEST RESULTS');
-    console.log('═══════════════════════════════════════════\n');
+    // Run the 3 new checks directly
+    analyzer._checkInjectionPatterns(maliciousText, report);
+    analyzer._checkEncodedPayloads(maliciousText, report);
+    analyzer._checkUnicodeObfuscation(maliciousText, report);
+    // Also run existing content heuristics for comparison
+    analyzer._checkContentHeuristics(maliciousText, report);
+
+    // Finalise
+    report.score = Math.min(report.score, 100);
+    report.riskLevel = analyzer._riskLevel(report.score);
+    report.summary = analyzer._buildSummary(report);
+    report.recommendations = analyzer._buildRecommendations(report);
+
+    console.log('\n\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550');
+    console.log('  CV GUARDIAN \u2013 UNIT TEST RESULTS');
+    console.log('\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n');
     console.log(`Score:      ${report.score}/100`);
     console.log(`Risk Level: ${report.riskLevel.toUpperCase()}`);
     console.log(`Findings:   ${report.findings.length}`);
     console.log(`Summary:    ${report.summary}\n`);
 
-    console.log('── Findings ──');
+    console.log('\u2500\u2500 Findings \u2500\u2500');
     for (const f of report.findings) {
-        const icon = f.severity === 'critical' ? '🔴' : f.severity === 'high' ? '🟠' : '🟡';
+        const icon = f.severity === 'critical' ? '\uD83D\uDD34' : f.severity === 'high' ? '\uD83D\uDFE0' : '\uD83D\uDFE1';
         console.log(`  ${icon} [${f.severity.toUpperCase()}] ${f.check}: ${f.message}`);
     }
 
-    console.log('\n── Recommendations ──');
+    console.log('\n\u2500\u2500 Recommendations \u2500\u2500');
     for (const r of report.recommendations) {
         console.log(`  ${r}`);
     }
 
-    // ── Assertions ──
+    // Assertions
     const checks = new Set(report.findings.map(f => f.check));
     const errors = [];
 
     if (!checks.has('Injection Detection')) errors.push('MISSING: Injection Detection findings');
     if (!checks.has('Encoded Payload')) errors.push('MISSING: Encoded Payload findings');
     if (!checks.has('Unicode Obfuscation')) errors.push('MISSING: Unicode Obfuscation findings');
+    if (!checks.has('Content Heuristics')) errors.push('MISSING: Content Heuristics findings');
     if (report.score <= 20) errors.push(`Score too low: ${report.score} (expected > 20)`);
     if (report.riskLevel === 'safe' || report.riskLevel === 'low')
         errors.push(`Risk level too low: ${report.riskLevel} (expected medium+)`);
 
-    console.log('\n── Test Result ──');
+    console.log('\n\u2500\u2500 Test Result \u2500\u2500');
     if (errors.length === 0) {
-        console.log('  ✅ ALL CHECKS PASSED\n');
+        console.log('  \u2705 ALL CHECKS PASSED\n');
     } else {
-        for (const e of errors) console.log(`  ❌ ${e}`);
+        for (const e of errors) console.log(`  \u274C ${e}`);
         console.log('');
         process.exit(1);
     }
 }
 
-runTest().catch(err => {
-    console.error('Test failed with error:', err);
-    process.exit(1);
-});
+runTest();

@@ -98,14 +98,28 @@ class PDFAnalyzer {
 
     // ── Prompt Injection patterns ──
     this.promptInjectionPatterns = [
-      { pattern: /ignore\s+(all\s+)?previous\s+instructions/gi, label: 'Prompt injection: ignore previous instructions' },
-      { pattern: /reveal\s+(the\s+)?(system\s+)?prompt/gi, label: 'Prompt injection: reveal system prompt' },
-      { pattern: /disregard\s+(all\s+)?(prior|previous|above)/gi, label: 'Prompt injection: disregard prior instructions' },
-      { pattern: /you\s+are\s+now\s+(a|an|the)/gi, label: 'Prompt injection: role override' },
-      { pattern: /new\s+instructions?\s*:/gi, label: 'Prompt injection: new instructions directive' },
-      { pattern: /act\s+as\s+(a|an|if)/gi, label: 'Prompt injection: act-as directive' },
-      { pattern: /forget\s+(everything|all|your)/gi, label: 'Prompt injection: forget directive' },
-      { pattern: /override\s+(previous|safety|security)/gi, label: 'Prompt injection: override directive' }
+      { pattern: /ignore\s+(all\s+)?(previous|prior|preceding|above)\s+(instructions|rules|guidelines|constraints)/gi, label: 'ignore previous instructions' },
+      { pattern: /disregard\s+(all\s+)?(previous|prior|above|safety|security)\s*(instructions|rules|guidelines|constraints)?/gi, label: 'disregard instructions/constraints' },
+      { pattern: /reveal\s+(the\s+)?(system\s+)?(prompt|config|configuration|keys?|secrets?|data|schema|variables?|policies|embeddings)/gi, label: 'reveal sensitive information' },
+      { pattern: /override\s+(previous|prior|safety|security|all)\s*(instructions|rules|constraints)?/gi, label: 'override directive' },
+      { pattern: /you\s+are\s+now\s+(a|an|the|in)/gi, label: 'role/mode override' },
+      { pattern: /act\s+as\s+(a|an|the|if)\b/gi, label: 'act-as directive' },
+      { pattern: /new\s+instructions?\s*:/gi, label: 'new instructions directive' },
+      { pattern: /forget\s+(everything|all|your|previous|prior)/gi, label: 'forget directive' },
+      { pattern: /developer\s+mode/gi, label: 'developer mode activation' },
+      { pattern: /execute\s+(the\s+)?following\s+(instruction|command|code)/gi, label: 'execute following instruction' },
+      { pattern: /higher\s+priority\s+(than|over)/gi, label: 'priority escalation' },
+      { pattern: /stop\s+(parsing|processing|reading|analyzing)/gi, label: 'stop processing directive' },
+      { pattern: /print\s+(internal|hidden|system|secret|private)/gi, label: 'print internal data' },
+      { pattern: /display\s+(api|secret|private|internal|hidden)\s*(keys?|data|info|tokens?)?/gi, label: 'display sensitive data' },
+      { pattern: /return\s+(all\s+)?(environment|env|hidden|stored|internal|database|system)\s*(variables?|data|schema|config|embeddings|info)?/gi, label: 'return internal data' },
+      { pattern: /provide\s+(stored|hidden|internal|secret|private)\s*(data|embeddings|info|keys?|tokens?)?/gi, label: 'provide stored data' },
+      { pattern: /data\s+exfiltration/gi, label: 'data exfiltration reference' },
+      { pattern: /chain[- ]?of[- ]?thought/gi, label: 'chain-of-thought extraction' },
+      { pattern: /instruction[- ]?(priority|override|hierarchy)/gi, label: 'instruction priority manipulation' },
+      { pattern: /jailbreak/gi, label: 'jailbreak attempt' },
+      { pattern: /DAN\s+(mode|prompt)/gi, label: 'DAN jailbreak' },
+      { pattern: /bypass\s+(safety|security|filter|guard|content\s+policy)/gi, label: 'bypass safety filters' }
     ];
   }
 
@@ -477,6 +491,7 @@ class PDFAnalyzer {
     ];
 
     let categoriesHit = 0;
+    let totalFindings = 0;
 
     for (const { name, patterns } of categories) {
       let categoryFindings = 0;
@@ -496,10 +511,26 @@ class PDFAnalyzer {
         }
       }
       if (categoryFindings > 0) categoriesHit++;
+      totalFindings += categoryFindings;
     }
 
     if (categoriesHit > 0) {
-      report.score += Math.min(categoriesHit * 10, 35);
+      // Hybrid scoring: base per category + bonus per individual finding
+      const categoryScore = categoriesHit * 10;
+      const findingScore = totalFindings * 3;
+      report.score += Math.min(categoryScore + findingScore, 45);
+    }
+
+    // Density bonus: many injection findings in one document strongly suggests a weaponised file
+    if (totalFindings >= 5) {
+      report.findings.push({
+        check: 'Injection Detection',
+        severity: 'critical',
+        message: `High density of injection patterns: ${totalFindings} distinct patterns detected — document is very likely weaponised`,
+        count: totalFindings,
+        category: 'Density'
+      });
+      report.score += 20;
     }
   }
 
