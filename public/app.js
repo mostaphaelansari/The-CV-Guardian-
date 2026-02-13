@@ -72,13 +72,23 @@
      * ────────────────────────────────────────────── */
     function handleFile(file) {
         // Validate type
-        if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-            showToast('❌ Only PDF files are accepted');
+        const validTypes = [
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'text/plain'
+        ];
+        const validExts = ['.pdf', '.docx', '.txt'];
+
+        const isTypeValid = validTypes.includes(file.type);
+        const isExtValid = validExts.some(ext => file.name.toLowerCase().endsWith(ext));
+
+        if (!isTypeValid && !isExtValid) {
+            showToast('❌ Only PDF, DOCX, and TXT files are accepted');
             return;
         }
-        // Validate size (10 MB)
-        if (file.size > 10 * 1024 * 1024) {
-            showToast('❌ File exceeds 10 MB limit');
+        // Validate size (15 MB)
+        if (file.size > 15 * 1024 * 1024) {
+            showToast('❌ File exceeds 15 MB limit');
             return;
         }
 
