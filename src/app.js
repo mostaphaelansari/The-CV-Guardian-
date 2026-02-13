@@ -4,6 +4,10 @@ const path = require('path');
 const apiRoutes = require('./routes/api');
 const swaggerDocs = require('./utils/swagger');
 const config = require('./config');
+const connectDB = require('./config/db');
+
+// Connect to Database
+connectDB();
 
 const app = express();
 

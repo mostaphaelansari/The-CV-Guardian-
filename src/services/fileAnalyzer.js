@@ -1,6 +1,3 @@
-const pdfParse = require('pdf-parse');
-const mammoth = require('mammoth');
-
 /**
  * Main File Analyzer – performs security checks on uploaded CV/resume files (PDF, DOCX, TXT).
  * Returns a structured threat report with score, risk level, findings, and recommendations.
@@ -149,14 +146,28 @@ class FileAnalyzer {
         const rawBuffer = fileBuffer.toString('latin1'); // For binary pattern matching
 
         try {
-            // ── Extract Text & Metadata ──
-            if (mimeType === 'application/pdf') {
-                const pdfData = await pdfParse(fileBuffer);
-                report.pageCount = pdfData.numpages || 0;
-                report.metadata = this._extractPDFMetadata(pdfData);
-                rawText = pdfData.text || '';
+            // ── Extract Text & Metadata (via Sandbox) ──
+            const sandboxService = require('./sandboxService');
+            let parseResult;
 
-                // PDF-specific checks
+            try {
+                parseResult = await sandboxService.parseFile(fileBuffer, fileName, mimeType);
+            } catch (sbError) {
+                throw new Error(`Sandbox parsing failed: ${sbError.message}`);
+            }
+
+            rawText = parseResult.text || '';
+            report.pageCount = parseResult.pageCount || 0;
+            report.metadata = parseResult.metadata || {};
+
+            if (mimeType === 'application/pdf') {
+                // PDF-specific checks using the raw buffer (safe regex)
+                const pdfData = {
+                    numpages: report.pageCount,
+                    info: report.metadata,
+                    text: rawText
+                };
+
                 this._checkStructure(fileBuffer, pdfData, report);
                 this._checkJavaScript(rawBuffer, report);
                 this._checkEmbeddedObjects(rawBuffer, report);
@@ -164,23 +175,15 @@ class FileAnalyzer {
                 this._checkObfuscation(rawBuffer, report);
 
             } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') { // DOCX
-                const result = await mammoth.extractRawText({ buffer: fileBuffer });
-                rawText = result.value;
-                report.pageCount = this._estimatePageCount(rawText);
-                // DOCX doesn't have the same binary structure/metadata issues as PDF, but we can check for macros if we used a more complex parser.
-                // For now, we focus on text-based threats.
-                // Check for warnings from mammoth
-                if (result.messages && result.messages.length > 0) {
+                if (rawText.length === 0 && parseResult.error) {
                     report.findings.push({
                         check: 'DOCX Structure',
                         severity: 'low',
-                        message: `DOCX parsing warnings: ${result.messages.map(m => m.message).join(', ').substring(0, 100)}...`
+                        message: `DOCX parsing warning: ${parseResult.error}`
                     });
                 }
-
             } else if (mimeType === 'text/plain') { // TXT
-                rawText = fileBuffer.toString('utf-8');
-                report.pageCount = this._estimatePageCount(rawText);
+                // Text checks
             }
 
             // ── Universal Text Checks (All formats) ──
@@ -190,6 +193,7 @@ class FileAnalyzer {
             this._checkInjectionPatterns(rawText, report);
             this._checkEncodedPayloads(rawText, report);
             this._checkUnicodeObfuscation(rawText, report);
+            await this._analyzeContext(rawText, report);
 
         } catch (err) {
             report.findings.push({
@@ -689,26 +693,31 @@ class FileAnalyzer {
     }
 
     /* ─────────────────────────────────────────────
-     * Experimental: NLP Context Analysis
+     * NLP Context Analysis
      * ────────────────────────────────────────────── */
     async _analyzeContext(text, report) {
         if (!text || text.length < 50) return;
 
         try {
-            // Dynamic import to avoid startup lag if not used
-            const { pipeline } = await import('@xenova/transformers'); // ESM import might fail in CJS
+            const nlpService = require('./nlpService');
+            const analysis = await nlpService.analyzeText(text.substring(0, 1000)); // Send first 1000 chars
 
-            // NOTE: This will download the model (~50-100MB) on first run.
-            // Using a very small model for sentiment as a proxy for "toxicity/threat"
-            // In a real scenario, we'd fine-tune a model for "resume" vs "attack".
-            // Since we can't easily rely on ESM in CJS without setup, we might skip actual execution 
-            // if we are in strict CJS mode, but let's try-catch it.
+            if (analysis && Array.isArray(analysis) && analysis.length > 0) {
+                const result = analysis[0];
+                // Example: { label: 'NEGATIVE', score: 0.99 }
+                report.metadata.sentiment = result.label;
+                report.metadata.sentimentScore = result.score;
 
-            // Fallback to simple keyword density if transformers fails
-            return;
-
+                if (result.label === 'NEGATIVE' && result.score > 0.9) {
+                    report.findings.push({
+                        check: 'NLP Analysis',
+                        severity: 'medium',
+                        message: `Negative sentiment detected in text (Score: ${result.score.toFixed(2)}) - potential aggressive tone.`
+                    });
+                    report.score += 10;
+                }
+            }
         } catch (err) {
-            // Transformers likely failed due to environment or download
             // console.warn('NLP Module skipped:', err.message);
         }
     }
