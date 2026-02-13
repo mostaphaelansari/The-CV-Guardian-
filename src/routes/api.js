@@ -87,6 +87,10 @@ const upload = multer({
  *               $ref: '#/components/schemas/Report'
  *       400:
  *         description: Bad request (invalid file type or no file)
+ *       413:
+ *         description: File too large (max 15MB)
+ *       429:
+ *         description: Too many requests (rate limit exceeded)
  *       500:
  *         description: Server error
  */

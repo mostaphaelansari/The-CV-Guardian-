@@ -10,6 +10,16 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Rate Limiting
+const rateLimit = require('express-rate-limit');
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: { error: 'Too many requests, please try again later.' }
+});
+app.use('/api', limiter);
+
 app.use(express.static(path.join(__dirname, '../public')));
 
 // Routes

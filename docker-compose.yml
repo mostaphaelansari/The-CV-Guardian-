@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  cv-guardian:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
