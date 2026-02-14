@@ -37,7 +37,15 @@ const reportSchema = new mongoose.Schema({
     }],
     metadata: {
         type: Map,
-        of: String
+        of: mongoose.Schema.Types.Mixed
+    },
+    aiScore: {
+        dimensions: {
+            type: Map,
+            of: mongoose.Schema.Types.Mixed
+        },
+        total: Number,
+        riskLabel: String
     }
 }, {
     timestamps: true

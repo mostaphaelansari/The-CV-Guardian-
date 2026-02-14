@@ -3,10 +3,9 @@ const config = require('./index');
 
 const connectDB = async () => {
     try {
-        const conn = await mongoose.connect(config.MONGO_URI || 'mongodb://localhost:27017/cv-guardian', {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-        });
+        const uri = config.MONGO_URI || 'mongodb://localhost:27017/cv-guardian';
+        console.log(`Connecting to MongoDB at: ${uri}`);
+        const conn = await mongoose.connect(uri);
         console.log(`MongoDB Connected: ${conn.connection.host}`);
     } catch (error) {
         console.error(`Error: ${error.message}`);
