@@ -153,12 +153,22 @@ class FileAnalyzer {
             try {
                 parseResult = await sandboxService.parseFile(fileBuffer, fileName, mimeType);
             } catch (sbError) {
-                throw new Error(`Sandbox parsing failed: ${sbError.message}`);
+                throw new Error(`Sandbox unavailable: ${sbError.message}`);
             }
 
             rawText = parseResult.text || '';
             report.pageCount = parseResult.pageCount || 0;
             report.metadata = parseResult.metadata || {};
+
+            // ── Handle partial parse (sandbox returned OK but parser failed internally) ──
+            if (parseResult.parseError) {
+                report.findings.push({
+                    check: 'File Parsing',
+                    severity: 'medium',
+                    message: `File could not be fully parsed: ${parseResult.parseError}. Some checks may be limited.`
+                });
+                report.score += 5;
+            }
 
             if (mimeType === 'application/pdf') {
                 // PDF-specific checks using the raw buffer (safe regex)
@@ -199,10 +209,10 @@ class FileAnalyzer {
         } catch (err) {
             report.findings.push({
                 check: 'File Parsing',
-                severity: 'high',
-                message: `Failed to parse file: ${err.message}. Corrupted or malformed files can be an attack vector.`
+                severity: 'medium',
+                message: `Failed to parse file: ${err.message}. Analysis may be incomplete.`
             });
-            report.score += 30;
+            report.score += 10;
         }
 
         // ── Finalise score & risk level ──
