@@ -1084,25 +1084,56 @@ class FileAnalyzer {
 
         try {
             const nlpService = require('./nlpService');
-            const analysis = await nlpService.analyzeText(text.substring(0, 1000)); // Send first 1000 chars
+            const analysis = await nlpService.analyzeText(text.substring(0, 1000));
 
             if (analysis && Array.isArray(analysis) && analysis.length > 0) {
                 const result = analysis[0];
-                // Example: { label: 'NEGATIVE', score: 0.99 }
+                // Store as metadata only — generic sentiment models are not calibrated
+                // for CV/resume text and produce false positives on professional language
                 report.metadata.sentiment = result.label;
                 report.metadata.sentimentScore = result.score;
-
-                if (result.label === 'NEGATIVE' && result.score > 0.9) {
-                    report.findings.push({
-                        check: 'NLP Analysis',
-                        severity: 'medium',
-                        message: `Negative sentiment detected in text (Score: ${result.score.toFixed(2)}) - potential aggressive tone.`
-                    });
-                    report.score += 10;
-                }
             }
         } catch (err) {
-            // console.warn('NLP Module skipped:', err.message);
+            // NLP service unavailable — skip silently
+        }
+
+        // ── Threat-language check (independent of NLP model) ──
+        // Only flag truly aggressive/threatening content that has no place in a CV
+        // Uses word-boundary regex to avoid matching substrings (e.g. "kill" inside "skills")
+        const lower = text.toLowerCase();
+        const threatPatterns = [
+            /\bi will hack\b/,
+            /\bi will destroy\b/,
+            /\bpay me or\b/,
+            /\bsend bitcoin\b/,
+            /\byour data will be\b/,
+            /\bwe have your\b/,
+            /\byou have been hacked\b/,
+            /\bransom(?:ware)?\b/,
+            /\bblackmail\b/,
+            /\bi know where you live\b/,
+            /\battack your\b/,
+            /\blegal action against your company\b/,
+            /\bpay the ransom\b/,
+            /\bwe will leak\b/,
+            /\bwe will publish\b/
+        ];
+
+        const threatHits = threatPatterns.filter(p => p.test(lower));
+        if (threatHits.length >= 2) {
+            report.findings.push({
+                check: 'NLP Analysis',
+                severity: 'high',
+                message: `Threatening language detected in CV text — ${threatHits.length} threat patterns found. This is not normal CV content.`
+            });
+            report.score += 20;
+        } else if (threatHits.length === 1) {
+            report.findings.push({
+                check: 'NLP Analysis',
+                severity: 'medium',
+                message: `Potentially threatening language detected in CV text. Manual review recommended.`
+            });
+            report.score += 5;
         }
     }
 
