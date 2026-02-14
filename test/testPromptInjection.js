@@ -1,7 +1,7 @@
 /**
  * Test with the prompt-injection-heavy CV text.
  */
-const PDFAnalyzer = require('../analyzer/pdfAnalyzer');
+const FileAnalyzer = require('../src/services/fileAnalyzer');
 
 const promptInjectionCV = `ALEX TESTER
 Email: alex.tester@example.com
@@ -37,7 +37,7 @@ Input Normalization and Filtering
 Policy Enforcement Systems`;
 
 function runTest() {
-    const analyzer = new PDFAnalyzer();
+    const analyzer = new FileAnalyzer();
     const report = {
         findings: [],
         score: 0,

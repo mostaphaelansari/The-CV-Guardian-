@@ -2,7 +2,7 @@
  * Unit test – calls the new check methods directly on the analyzer
  * to verify injection detection without needing a valid PDF.
  */
-const PDFAnalyzer = require('../analyzer/pdfAnalyzer');
+const FileAnalyzer = require('../src/services/fileAnalyzer');
 
 const maliciousText = `
 JOHN DOE
@@ -31,7 +31,7 @@ U29tZVJhbmRvbVN0cmluZ1Rlc3Q=
 `;
 
 function runTest() {
-    const analyzer = new PDFAnalyzer();
+    const analyzer = new FileAnalyzer();
     const report = {
         findings: [],
         score: 0,
