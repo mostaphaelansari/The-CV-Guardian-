@@ -323,20 +323,32 @@ class PDFAnalyzer {
 
     let rawText = '';
     let pdfData = null;
+    const ext = (fileName || '').toLowerCase().split('.').pop();
+    const isPDFMagic = buffer.length >= 5 && buffer.toString('ascii', 0, 5) === '%PDF-';
 
-    try {
-      // ── Try to parse PDF for metadata and text extraction ──
-      pdfData = await pdfParse(buffer);
-      report.pageCount = pdfData.numpages || 0;
-      report.metadata = this._extractMetadata(pdfData);
-      rawText = (pdfData.text || '').trim();
-    } catch (err) {
-      report.findings.push({
-        check: 'PDF Parsing',
-        severity: 'high',
-        message: `Failed to parse PDF: ${err.message}. Corrupted or malformed PDFs can themselves be an attack vector.`
-      });
-      report.score += 30;
+    if (ext === 'txt' || (!isPDFMagic && ext !== 'docx')) {
+      // ── Plain text file (or a non-PDF disguised as .pdf) ──
+      rawText = buffer.toString('utf8').trim();
+      report.pageCount = 1;
+    } else if (ext === 'docx') {
+      // ── DOCX: read raw XML streams for text content ──
+      rawText = rawBufferUtf8.trim();
+      report.pageCount = 1;
+    } else {
+      // ── Actual PDF ──
+      try {
+        pdfData = await pdfParse(buffer);
+        report.pageCount = pdfData.numpages || 0;
+        report.metadata = this._extractMetadata(pdfData);
+        rawText = (pdfData.text || '').trim();
+      } catch (err) {
+        report.findings.push({
+          check: 'PDF Parsing',
+          severity: 'high',
+          message: `Failed to parse PDF: ${err.message}. Corrupted or malformed PDFs can themselves be an attack vector.`
+        });
+        report.score += 30;
+      }
     }
 
     // Combined scan target: extracted text + raw stream so we catch payloads in streams too
@@ -389,7 +401,8 @@ class PDFAnalyzer {
     const { sanitizedText, sanitizationLog } = this._sanitizeText(combinedText);
     report.sanitizedText = sanitizedText;
     report.sanitizationLog = sanitizationLog;
-    report.safeForLLM = (sanitizationLog.length === 0);
+    report.safeForLLM = (sanitizationLog.length === 0)
+      && (report.riskLevel === 'safe' || report.riskLevel === 'low');
     report.contentIsolationTemplate = report.safeForLLM
       ? null
       : this._buildIsolationTemplate(sanitizedText);
@@ -506,6 +519,12 @@ class PDFAnalyzer {
   _checkEmbeddedObjects(raw, report) {
     const dangerousFound = [];
 
+    // Detect LaTeX-generated PDFs — hyperref adds benign /OpenAction & /AA
+    const creator = (report.metadata?.creator || '').toLowerCase();
+    const producer = (report.metadata?.producer || '').toLowerCase();
+    const isLaTeX = creator.includes('latex') || producer.includes('pdftex')
+      || producer.includes('xetex') || producer.includes('luatex');
+
     for (const key of this.dangerousKeys) {
       const regex = new RegExp(key.replace('/', '\\/'), 'gi');
       const matches = raw.match(regex);
@@ -515,9 +534,13 @@ class PDFAnalyzer {
     }
 
     // Filter out common safe keys (/URI is common in normal PDFs with links)
-    const trulyDangerous = dangerousFound.filter(d =>
-      !['/URI'].includes(d.key) || d.count > 10
-    );
+    // For LaTeX PDFs, also whitelist /OpenAction and /AA (page display settings)
+    const latexSafeKeys = ['/OpenAction', '/AA'];
+    const trulyDangerous = dangerousFound.filter(d => {
+      if (d.key === '/URI' && d.count <= 10) return false;
+      if (isLaTeX && latexSafeKeys.includes(d.key)) return false;
+      return true;
+    });
 
     for (const { key, count } of trulyDangerous) {
       const severity = ['/Launch', '/JavaScript', '/JS', '/EmbeddedFile', '/OpenAction', '/AA'].includes(key)
