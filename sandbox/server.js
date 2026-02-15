@@ -6,6 +6,11 @@ const mammoth = require('mammoth');
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
+// Health check endpoint for readiness probes
+app.get('/health', (_req, res) => {
+    res.json({ status: 'ok', service: 'cv-guardian-sandbox' });
+});
+
 app.post('/parse', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {

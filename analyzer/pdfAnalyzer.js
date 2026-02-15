@@ -1,4 +1,5 @@
 const pdfParse = require('pdf-parse');
+const sandboxService = require('../src/services/sandboxService');
 
 /**
  * Main PDF Analyzer – performs 7 security checks on uploaded CV/resume PDFs.
@@ -326,30 +327,65 @@ class PDFAnalyzer {
     const ext = (fileName || '').toLowerCase().split('.').pop();
     const isPDFMagic = buffer.length >= 5 && buffer.toString('ascii', 0, 5) === '%PDF-';
 
-    if (ext === 'txt' || (!isPDFMagic && ext !== 'docx')) {
-      // ── Plain text file (or a non-PDF disguised as .pdf) ──
-      rawText = buffer.toString('utf8').trim();
-      report.pageCount = 1;
-    } else if (ext === 'docx') {
-      // ── DOCX: read raw XML streams for text content ──
-      rawText = rawBufferUtf8.trim();
-      report.pageCount = 1;
-    } else {
-      // ── Actual PDF ──
-      try {
-        pdfData = await pdfParse(buffer);
-        report.pageCount = pdfData.numpages || 0;
-        report.metadata = this._extractMetadata(pdfData);
-        rawText = (pdfData.text || '').trim();
-      } catch (err) {
+    // ── Determine MIME type for sandbox ──
+    const mimeMap = {
+      pdf: 'application/pdf',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      txt: 'text/plain'
+    };
+    const mimeType = mimeMap[ext] || 'application/octet-stream';
+
+    // ── Try sandbox first, fall back to local parsing ──
+    let usedSandbox = false;
+    try {
+      const parseResult = await sandboxService.parseFile(buffer, fileName, mimeType);
+      rawText = (parseResult.text || '').trim();
+      report.pageCount = parseResult.pageCount || 0;
+      report.metadata = parseResult.metadata || {};
+      usedSandbox = true;
+      console.log('[Sandbox] Parsing via sandbox service');
+
+      if (parseResult.parseError) {
         report.findings.push({
-          check: 'PDF Parsing',
-          severity: 'high',
-          message: `Failed to parse PDF: ${err.message}. Corrupted or malformed PDFs can themselves be an attack vector.`
+          check: 'File Parsing',
+          severity: 'medium',
+          message: `Sandbox parsed with warning: ${parseResult.parseError}`
         });
-        report.score += 30;
+        report.score += 5;
+      }
+
+      // For PDFs, build pdfData structure for structure checks
+      if (ext === 'pdf' || isPDFMagic) {
+        pdfData = { numpages: report.pageCount, info: report.metadata, text: rawText };
+      }
+    } catch (sandboxErr) {
+      console.log(`[Fallback] Sandbox unavailable (${sandboxErr.message}), parsing locally`);
+
+      // ── Local fallback (same as original logic) ──
+      if (ext === 'txt' || (!isPDFMagic && ext !== 'docx')) {
+        rawText = buffer.toString('utf8').trim();
+        report.pageCount = 1;
+      } else if (ext === 'docx') {
+        rawText = rawBufferUtf8.trim();
+        report.pageCount = 1;
+      } else {
+        try {
+          pdfData = await pdfParse(buffer);
+          report.pageCount = pdfData.numpages || 0;
+          report.metadata = this._extractMetadata(pdfData);
+          rawText = (pdfData.text || '').trim();
+        } catch (err) {
+          report.findings.push({
+            check: 'PDF Parsing',
+            severity: 'high',
+            message: `Failed to parse PDF: ${err.message}. Corrupted or malformed PDFs can themselves be an attack vector.`
+          });
+          report.score += 30;
+        }
       }
     }
+
+    report.parsingMethod = usedSandbox ? 'sandbox' : 'local';
 
     // Combined scan target: extracted text + raw stream so we catch payloads in streams too
     const combinedText = rawText + (rawBuffer.length > 0 ? '\n' + rawBuffer : '');

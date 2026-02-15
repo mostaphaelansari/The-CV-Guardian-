@@ -9,12 +9,33 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - MONGO_URI=mongodb://mongo:27017/cv-guardian
+      - SANDBOX_URL=http://sandbox:3001
     restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp
     depends_on:
       - mongo
+      - sandbox
+
+  sandbox:
+    build: ./sandbox
+    expose:
+      - "3001"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   mongo:
     image: mongo:7
