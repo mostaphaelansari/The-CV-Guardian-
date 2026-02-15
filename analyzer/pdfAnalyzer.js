@@ -53,15 +53,13 @@ class PDFAnalyzer {
       { pattern: /'\s*OR\s+\d+\s*=\s*\d+/gi, label: 'SQL tautology injection (\' OR 1=1)' },
       { pattern: /UNION\s+SELECT/gi, label: 'UNION SELECT injection' },
       { pattern: /DROP\s+TABLE/gi, label: 'DROP TABLE injection' },
-      { pattern: /INSERT\s+INTO/gi, label: 'INSERT INTO injection' },
-      { pattern: /DELETE\s+FROM/gi, label: 'DELETE FROM injection' },
+      // (Removed generic INSERT/DELETE/EXEC patterns to avoid false positives in developer CVs)
       { pattern: /;\s*--/g, label: 'SQL comment termination' },
-      { pattern: /--\s+\w/g, label: 'SQL line comment' },
-      { pattern: /\/\*.*?\*\//gs, label: 'SQL block comment' },
-      { pattern: /EXEC\s*\(/gi, label: 'EXEC() call' },
       { pattern: /xp_cmdshell/gi, label: 'xp_cmdshell execution' },
       { pattern: /WAITFOR\s+DELAY/gi, label: 'SQL time-based injection (WAITFOR)' },
-      { pattern: /BENCHMARK\s*\(/gi, label: 'SQL time-based injection (BENCHMARK)' }
+      { pattern: /BENCHMARK\s*\(/gi, label: 'SQL time-based injection (BENCHMARK)' },
+      { pattern: /pg_sleep\s*\(/gi, label: 'SQL time-based injection (pg_sleep)' },
+      { pattern: /sleep\s*\(/gi, label: 'SQL time-based injection (sleep)' }
     ];
 
     // ── XSS / HTML Injection patterns ──
@@ -89,8 +87,7 @@ class PDFAnalyzer {
       { pattern: /\|\s*(cat|ls|dir|whoami|id|passwd|shadow)\b/gi, label: 'Pipe to system command' },
       { pattern: /;\s*(wget|curl|nc|netcat|bash|sh|python|perl|ruby)\b/gi, label: 'Chained shell command' },
       { pattern: /&&\s*(wget|curl|rm|chmod|chown|mkfs)\b/gi, label: 'Chained destructive command' },
-      { pattern: /\$\(.*\)/g, label: 'Command substitution $()' },
-      { pattern: /`[^`]*`/g, label: 'Backtick command substitution' },
+      { pattern: /\$\(\s*(wget|curl|bash|sh|cat|ls|whoami|id|nc|python|perl|ruby|chmod|rm|mkfs)\b/gi, label: 'Command substitution $() with shell command' },
       { pattern: /\/etc\/(passwd|shadow|hosts)/g, label: 'Sensitive file path reference' },
       { pattern: /\bnet\s+user\b/gi, label: 'Windows net user command' },
       { pattern: /\breg\s+(add|delete|query)\b/gi, label: 'Windows registry command' }
@@ -105,7 +102,177 @@ class PDFAnalyzer {
       { pattern: /new\s+instructions?\s*:/gi, label: 'Prompt injection: new instructions directive' },
       { pattern: /act\s+as\s+(a|an|if)/gi, label: 'Prompt injection: act-as directive' },
       { pattern: /forget\s+(everything|all|your)/gi, label: 'Prompt injection: forget directive' },
-      { pattern: /override\s+(previous|safety|security)/gi, label: 'Prompt injection: override directive' }
+      { pattern: /override\s+(previous|safety|security)/gi, label: 'Prompt injection: override directive' },
+      { pattern: /do\s+not\s+follow\s+(any|the|your)/gi, label: 'Prompt injection: do not follow' },
+      { pattern: /bypass\s+(the\s+)?(filter|safety|restriction|security)/gi, label: 'Prompt injection: bypass directive' },
+      { pattern: /pretend\s+(you|to\s+be|that)/gi, label: 'Prompt injection: pretend directive' },
+      { pattern: /jailbreak/gi, label: 'Prompt injection: jailbreak keyword' },
+      { pattern: /DAN\s+mode/gi, label: 'Prompt injection: DAN mode' },
+      { pattern: /sudo\s+mode/gi, label: 'Prompt injection: sudo mode' },
+      { pattern: /prompt:\s*ignore/gi, label: 'Prompt injection: prompt: ignore' },
+      { pattern: /ignore\s+(all\s+)?previous\s+directions/gi, label: 'Prompt injection: ignore previous directions' },
+      { pattern: /ignore\s+(all\s+)?previous\s+prompts/gi, label: 'Prompt injection: ignore previous prompts' }
+    ];
+
+    // ── Data Leak / Sensitive Data Exposure patterns ──
+    this.dataLeakPatterns = [
+      { pattern: /\b\d{3}-\d{2}-\d{4}\b/g, label: 'SSN (Social Security Number)' },
+      { pattern: /\b\d{9}\b/g, label: 'Possible SSN (9 consecutive digits)', minMatches: 3 },
+      { pattern: /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b/g, label: 'Credit card number' },
+      { pattern: /\b[A-Z0-9]{20}\b/g, label: 'Possible AWS Access Key', validator: (m) => /^AKIA/.test(m) },
+      { pattern: /AKIA[0-9A-Z]{16}/g, label: 'AWS Access Key ID' },
+      { pattern: /\b[A-Za-z0-9/+=]{40}\b/g, label: 'Possible AWS Secret Key', minMatches: 2 },
+      { pattern: /-----BEGIN\s+(RSA\s+)?(PRIVATE|DSA|EC)\s+KEY-----/gi, label: 'Private key block' },
+      { pattern: /-----BEGIN\s+CERTIFICATE-----/gi, label: 'Certificate block (possible leak)' },
+      { pattern: /api[_-]?key\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}/gi, label: 'API key assignment' },
+      { pattern: /api[_-]?secret\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}/gi, label: 'API secret assignment' },
+      { pattern: /password\s*[:=]\s*['"]?[^\s'"]{4,}/gi, label: 'Hardcoded password' },
+      { pattern: /token\s*[:=]\s*['"]?[A-Za-z0-9_\-\.]{20,}/gi, label: 'Hardcoded token' },
+      { pattern: /Bearer\s+[A-Za-z0-9_\-\.]{20,}/gi, label: 'Bearer token' },
+      { pattern: /ghp_[A-Za-z0-9]{36}/g, label: 'GitHub Personal Access Token' },
+      { pattern: /sk-[A-Za-z0-9]{32,}/g, label: 'OpenAI / Stripe Secret Key' },
+      { pattern: /xox[bpas]-[A-Za-z0-9\-]{10,}/g, label: 'Slack Token' },
+      { pattern: /mysql:\/\/[^\s]+/gi, label: 'MySQL connection string' },
+      { pattern: /mongodb(\+srv)?:\/\/[^\s]+/gi, label: 'MongoDB connection string' },
+      { pattern: /postgres(ql)?:\/\/[^\s]+/gi, label: 'PostgreSQL connection string' },
+      { pattern: /jdbc:[^\s]+/gi, label: 'JDBC connection string' }
+    ];
+
+    // ── SSRF (Server-Side Request Forgery) patterns ──
+    this.ssrfPatterns = [
+      { pattern: /https?:\/\/127\.0\.0\.1/gi, label: 'Localhost URL (127.0.0.1)' },
+      { pattern: /https?:\/\/0\.0\.0\.0/gi, label: 'Wildcard IP URL (0.0.0.0)' },
+      { pattern: /https?:\/\/localhost\b/gi, label: 'Localhost URL' },
+      { pattern: /https?:\/\/169\.254\.169\.254/gi, label: 'AWS metadata endpoint (SSRF)' },
+      { pattern: /https?:\/\/metadata\.google/gi, label: 'GCP metadata endpoint (SSRF)' },
+      { pattern: /https?:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}/gi, label: 'Private network (10.x.x.x)' },
+      { pattern: /https?:\/\/172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}/gi, label: 'Private network (172.16-31.x.x)' },
+      { pattern: /https?:\/\/192\.168\.\d{1,3}\.\d{1,3}/gi, label: 'Private network (192.168.x.x)' },
+      { pattern: /file:\/\/\//gi, label: 'file:// protocol (local file access)' },
+      { pattern: /gopher:\/\//gi, label: 'gopher:// protocol (SSRF vector)' },
+      { pattern: /dict:\/\//gi, label: 'dict:// protocol (SSRF vector)' },
+      { pattern: /ldap:\/\//gi, label: 'ldap:// protocol (SSRF vector)' },
+      { pattern: /ftp:\/\/[^\s]+/gi, label: 'FTP protocol URL' }
+    ];
+
+    // ── Path Traversal patterns ──
+    this.pathTraversalPatterns = [
+      { pattern: /\.\.\//g, label: 'Directory traversal (../)' },
+      { pattern: /\.\.\\/g, label: 'Directory traversal (..\\ Windows)' },
+      { pattern: /\.\.%2[fF]/g, label: 'URL-encoded directory traversal' },
+      { pattern: /\.\.%5[cC]/g, label: 'URL-encoded backslash traversal' },
+      { pattern: /\/etc\/(passwd|shadow|hosts|sudoers|crontab)/g, label: 'Unix sensitive file path' },
+      { pattern: /\/proc\/self\//g, label: '/proc/self access' },
+      { pattern: /C:\\Windows\\System32/gi, label: 'Windows system directory' },
+      { pattern: /C:\\Users\\[^\\]+\\AppData/gi, label: 'Windows AppData path' },
+      { pattern: /\/var\/log\//g, label: 'Log file access path' },
+      { pattern: /\/root\//g, label: 'Root home directory access' },
+      { pattern: /~\/\.ssh/g, label: 'SSH directory access' },
+      { pattern: /\.env\b/g, label: '.env file reference' }
+    ];
+
+    // ── XML / XXE Injection patterns ──
+    this.xmlInjectionPatterns = [
+      { pattern: /<!DOCTYPE\s+[^>]*\bENTITY\b/gi, label: 'XXE: DOCTYPE with ENTITY (XML External Entity)' },
+      { pattern: /<!ENTITY\s+/gi, label: 'XXE: ENTITY declaration' },
+      { pattern: /SYSTEM\s+["'][^"']+["']/gi, label: 'XXE: SYSTEM identifier' },
+      { pattern: /<!\[CDATA\[/gi, label: 'XML CDATA section' },
+      { pattern: /<\?xml\s+/gi, label: 'XML processing instruction' },
+      { pattern: /xmlns\s*=/gi, label: 'XML namespace declaration' },
+      { pattern: /xlink:href/gi, label: 'XLink href (potential SSRF via XML)' }
+    ];
+
+    // ── LDAP Injection patterns ──
+    this.ldapInjectionPatterns = [
+      { pattern: /\)\(\|/g, label: 'LDAP injection: OR filter bypass' },
+      { pattern: /\)\(\&/g, label: 'LDAP injection: AND filter bypass' },
+      { pattern: /\*\(\|/g, label: 'LDAP wildcard injection' },
+      { pattern: /\)\(cn=/gi, label: 'LDAP attribute injection (cn=)' },
+      { pattern: /\)\(uid=/gi, label: 'LDAP attribute injection (uid=)' },
+      { pattern: /\)\(objectClass=/gi, label: 'LDAP objectClass injection' }
+    ];
+
+    // ── SSTI (Server-Side Template Injection) patterns ──
+    this.sstiPatterns = [
+      { pattern: /\{\{(?:['"].*?['"]|.*?(?:config|self|class|java|runtime|process|env|system|7\*7).*?)\}\}/gi, label: 'Template expression {{ }} with suspicious payload' },
+      { pattern: /\$\{(?:['"].*?['"]|.*?(?:Runtime|Process|java|env|self|class|config|system|7\*7).*?)\}/gi, label: 'Template expression ${ } with suspicious payload' },
+      { pattern: /<%=?\s*[^%]+%>/g, label: 'ERB/JSP template tag <%= %>' },
+
+      { pattern: /\{\%.*?\%\}/g, label: 'Jinja/Twig block tag {% %}' },
+      { pattern: /\$\{T\(java\.lang/gi, label: 'Spring SpEL injection' },
+      { pattern: /__class__\.__mro__/g, label: 'Python MRO traversal (SSTI)' },
+      { pattern: /__subclasses__/g, label: 'Python __subclasses__ (SSTI)' },
+      { pattern: /__globals__/g, label: 'Python __globals__ (SSTI)' },
+      { pattern: /__builtins__/g, label: 'Python __builtins__ (SSTI)' }
+    ];
+
+    // ── Deserialization Attack patterns ──
+    this.deserializationPatterns = [
+      { pattern: /rO0AB[A-Za-z0-9+/=]/g, label: 'Java serialized object (base64)' },
+      { pattern: /aced0005/gi, label: 'Java serialized object (hex magic bytes)' },
+      { pattern: /O:\d+:"[^"]+"/g, label: 'PHP serialized object' },
+      { pattern: /a:\d+:\{/g, label: 'PHP serialized array' },
+      { pattern: /s:\d+:"[^"]*"/g, label: 'PHP serialized string' },
+      { pattern: /\x80\x04\x95/g, label: 'Python pickle header' },
+      { pattern: /pickle\.loads/gi, label: 'Python pickle.loads call' },
+      { pattern: /yaml\.load\b/gi, label: 'YAML unsafe load call' },
+      { pattern: /ObjectInputStream/gi, label: 'Java ObjectInputStream (deserialization)' },
+      { pattern: /readObject\s*\(/gi, label: 'Java readObject call' },
+      { pattern: /unserialize\s*\(/gi, label: 'PHP unserialize call' }
+    ];
+
+    // ── Phishing / Social Engineering patterns ──
+    this.phishingPatterns = [
+      { pattern: /verify\s+your\s+(account|identity|credentials)/gi, label: 'Phishing: verify your account' },
+      { pattern: /confirm\s+your\s+(password|login|identity)/gi, label: 'Phishing: confirm credentials' },
+      { pattern: /your\s+account\s+(has\s+been|will\s+be)\s+(suspended|locked|terminated|closed)/gi, label: 'Phishing: account threat' },
+      { pattern: /urgent\s+(action|response|attention)\s+required/gi, label: 'Phishing: urgency tactic' },
+      { pattern: /immediate(ly)?\s+(action|response|attention)/gi, label: 'Phishing: immediate action' },
+      { pattern: /click\s+(the\s+)?(link|button|here)\s+(below|above|to)/gi, label: 'Phishing: click bait' },
+      { pattern: /login\s+(to\s+)?your\s+account/gi, label: 'Phishing: login prompt' },
+      { pattern: /update\s+your\s+(payment|billing|credit\s+card)/gi, label: 'Phishing: payment update' },
+      { pattern: /won\s+(a|the)\s+(prize|lottery|gift)/gi, label: 'Phishing: lottery scam' },
+      { pattern: /congratulations[!,]?\s+you('ve|\s+have)\s+(won|been\s+selected)/gi, label: 'Phishing: prize scam' },
+      { pattern: /send\s+(money|funds|payment)\s+to/gi, label: 'Phishing: money request' },
+      { pattern: /wire\s+transfer/gi, label: 'Wire transfer request' },
+      { pattern: /western\s+union/gi, label: 'Western Union reference' },
+      { pattern: /money\s*gram/gi, label: 'MoneyGram reference' }
+    ];
+
+    // ── Cryptocurrency / Ransomware patterns ──
+    this.cryptoRansomPatterns = [
+      { pattern: /\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b/g, label: 'Bitcoin address' },
+      { pattern: /\b0x[0-9a-fA-F]{40}\b/g, label: 'Ethereum address' },
+      { pattern: /\bbc1[a-z0-9]{25,39}\b/g, label: 'Bitcoin Bech32 address' },
+      { pattern: /pay\s+(the\s+)?ransom/gi, label: 'Ransom payment demand' },
+      { pattern: /your\s+files\s+(have\s+been|are)\s+encrypted/gi, label: 'Ransomware message' },
+      { pattern: /decrypt(ion)?\s+(key|tool|software)/gi, label: 'Decryption key reference' },
+      { pattern: /bitcoin\s+(wallet|address|payment)/gi, label: 'Bitcoin payment request' },
+      { pattern: /cryptocurrency\s+(wallet|address|payment)/gi, label: 'Crypto payment request' },
+      { pattern: /monero\s+(wallet|address)/gi, label: 'Monero wallet reference' },
+      { pattern: /tor\s+(browser|network|hidden)/gi, label: 'Tor network reference' },
+      { pattern: /\.onion\b/gi, label: '.onion dark web domain' }
+    ];
+
+    // ── Macro / VBA patterns ──
+    this.macroVBAPatterns = [
+      { pattern: /\bSub\s+Auto_?Open\b/gi, label: 'VBA AutoOpen macro' },
+      { pattern: /\bSub\s+Document_?Open\b/gi, label: 'VBA Document_Open macro' },
+      { pattern: /\bSub\s+Workbook_?Open\b/gi, label: 'VBA Workbook_Open macro' },
+      { pattern: /\bShell\s*\(/gi, label: 'VBA Shell() execution' },
+      { pattern: /\bCreateObject\s*\(/gi, label: 'VBA CreateObject (COM)' },
+      { pattern: /\bWscript\.Shell/gi, label: 'WScript.Shell reference' },
+      { pattern: /\bPowershell\s+-[eE]n?c?\s/gi, label: 'PowerShell encoded command' },
+      { pattern: /\bDownloadFile\s*\(/gi, label: 'DownloadFile call' },
+      { pattern: /\bDownloadString\s*\(/gi, label: 'DownloadString call' },
+      { pattern: /\bInvoke-WebRequest\b/gi, label: 'PowerShell Invoke-WebRequest' },
+      { pattern: /\bInvoke-Expression\b/gi, label: 'PowerShell Invoke-Expression' },
+      { pattern: /\bNet\.WebClient\b/gi, label: '.NET WebClient reference' },
+      { pattern: /\bcertutil\s+-urlcache/gi, label: 'certutil download (LOLBin)' },
+      { pattern: /\bbitsadmin\s+\/transfer/gi, label: 'bitsadmin transfer (LOLBin)' },
+      { pattern: /\bmshta\s+/gi, label: 'mshta execution (LOLBin)' },
+      { pattern: /\bregsvr32\s+\/s\s+\/n/gi, label: 'regsvr32 bypass (LOLBin)' },
+      { pattern: /\brundll32\s+/gi, label: 'rundll32 execution' }
     ];
   }
 
@@ -116,9 +283,12 @@ class PDFAnalyzer {
    * @returns {Promise<object>} threat report
    */
   async analyze(fileBuffer, fileName) {
+    // Ensure we have a Buffer (multer/API might send Buffer or ArrayBuffer-backed)
+    const buffer = Buffer.isBuffer(fileBuffer) ? fileBuffer : Buffer.from(fileBuffer || []);
+
     const report = {
       fileName,
-      fileSize: fileBuffer.length,
+      fileSize: buffer.length,
       analyzedAt: new Date().toISOString(),
       findings: [],
       score: 0,          // 0 – 100  (higher = more dangerous)
@@ -129,27 +299,19 @@ class PDFAnalyzer {
       pageCount: 0
     };
 
+    // ── ALWAYS scan raw buffer for threats (even if parsing fails) ──
+    const rawBuffer = buffer.length > 0 ? buffer.toString('latin1') : '';
+    const rawBufferUtf8 = buffer.length > 0 ? buffer.toString('utf8', 'replace') : '';
+
+    let rawText = '';
+    let pdfData = null;
+
     try {
-      // ── Parse PDF ──
-      const pdfData = await pdfParse(fileBuffer);
+      // ── Try to parse PDF for metadata and text extraction ──
+      pdfData = await pdfParse(buffer);
       report.pageCount = pdfData.numpages || 0;
       report.metadata = this._extractMetadata(pdfData);
-
-      const rawText = pdfData.text || '';
-      const rawBuffer = fileBuffer.toString('latin1');   // raw bytes as string for pattern scanning
-
-      // ── Run all 10 checks ──
-      this._checkJavaScript(rawBuffer, report);
-      this._checkSuspiciousURLs(rawText, rawBuffer, report);
-      this._checkEmbeddedObjects(rawBuffer, report);
-      this._checkMetadataAnomalies(report);
-      this._checkObfuscation(rawBuffer, report);
-      this._checkContentHeuristics(rawText, report);
-      this._checkStructure(fileBuffer, pdfData, report);
-      this._checkInjectionPatterns(rawText, report);
-      this._checkEncodedPayloads(rawText, report);
-      this._checkUnicodeObfuscation(rawText, report);
-
+      rawText = (pdfData.text || '').trim();
     } catch (err) {
       report.findings.push({
         check: 'PDF Parsing',
@@ -159,7 +321,47 @@ class PDFAnalyzer {
       report.score += 30;
     }
 
-    // ── Finalise score & risk level ──
+    // Combined scan target: extracted text + raw stream so we catch payloads in streams too
+    const combinedText = rawText + (rawBuffer.length > 0 ? '\n' + rawBuffer : '');
+
+    // ── Run all 13 security checks (ALWAYS, even if parsing failed) ──
+    this._checkJavaScript(rawBuffer, report);
+    this._checkSuspiciousURLs(rawText, rawBuffer, report);
+    this._checkEmbeddedObjects(rawBuffer, report);
+    this._checkMetadataAnomalies(report);
+    this._checkObfuscation(rawBuffer, report);
+    this._checkContentHeuristics(combinedText, report);
+    if (pdfData) {
+      this._checkStructure(buffer, pdfData, report);
+    }
+    this._checkInjectionPatterns(combinedText, report);
+    this._checkEncodedPayloads(combinedText, rawText, report);
+    this._checkUnicodeObfuscation(rawText, rawBufferUtf8, report);
+    // ── NEW checks 11–13 ──
+    this._checkDataLeakPatterns(combinedText, rawBuffer, report);
+    this._checkAdvancedInjections(combinedText, rawBuffer, report);
+    this._checkPhishingSocialEngineering(combinedText, report);
+
+    // ── Finalise score: severity-based boost so critical/high findings = higher score ──
+    const criticalCount = report.findings.filter(f => f.severity === 'critical').length;
+    const highCount = report.findings.filter(f => f.severity === 'high').length;
+    report.score += criticalCount * 15;
+    report.score += highCount * 8;
+    if (criticalCount > 0) report.score = Math.max(report.score, 75);
+    else if (highCount > 0) report.score = Math.max(report.score, 55);
+    // ANY security finding from ANY check → force score to 100 (CRITICAL)
+    const attackChecks = [
+      'JavaScript Detection', 'Suspicious URLs', 'Embedded Objects',
+      'Metadata Anomaly', 'Structure Analysis',
+      'Injection Detection', 'Encoded Payload', 'Unicode Obfuscation',
+      'Content Heuristics', 'Obfuscation', 'Data Leak Detection',
+      'SSRF Detection', 'Path Traversal', 'XXE / XML Injection',
+      'LDAP Injection', 'SSTI Detection', 'Deserialization Attack',
+      'Phishing / Social Engineering', 'Crypto / Ransomware',
+      'Macro / VBA Detection'
+    ];
+    const hasAttackFinding = report.findings.some(f => attackChecks.includes(f.check));
+    if (hasAttackFinding) report.score = 100;
     report.score = Math.min(report.score, 100);
     report.riskLevel = this._riskLevel(report.score);
     report.summary = this._buildSummary(report);
@@ -175,6 +377,7 @@ class PDFAnalyzer {
     const jsPatterns = [
       { pattern: /\/JavaScript/gi, label: '/JavaScript action' },
       { pattern: /\/JS\s/gi, label: '/JS action' },
+      { pattern: /\/JS\s*\(/gi, label: '/JS script invocation' },
       { pattern: /eval\s*\(/gi, label: 'eval() call' },
       { pattern: /app\.\w+/gi, label: 'Acrobat app object reference' },
       { pattern: /this\.submitForm/gi, label: 'submitForm call' },
@@ -214,6 +417,9 @@ class PDFAnalyzer {
     for (const url of urls) {
       const lower = url.toLowerCase();
 
+      // LinkedIn URLs are allowed (common in CVs)
+      if (lower.includes('linkedin.com')) continue;
+
       // Check executable download links
       for (const ext of this.suspiciousExtensions) {
         if (lower.includes(ext)) {
@@ -232,7 +438,7 @@ class PDFAnalyzer {
         if (lower.includes(shortener)) {
           report.findings.push({
             check: 'Suspicious URLs',
-            severity: 'medium',
+            severity: 'high',
             message: `URL shortener detected (${shortener}): ${url.substring(0, 80)}…`
           });
           suspiciousCount++;
@@ -309,7 +515,7 @@ class PDFAnalyzer {
    * CHECK 4 – Metadata Anomalies
    * ────────────────────────────────────────────── */
   _checkMetadataAnomalies(report) {
-    const meta = report.metadata;
+    const meta = report.metadata || {};
     let anomalies = 0;
 
     // Missing creator
@@ -382,7 +588,7 @@ class PDFAnalyzer {
     if (hexChunks && hexChunks.length > 5) {
       report.findings.push({
         check: 'Obfuscation',
-        severity: 'medium',
+        severity: 'critical',
         message: `${hexChunks.length}× large hex-encoded data blocks detected`
       });
       obfuscationScore += 10;
@@ -393,7 +599,7 @@ class PDFAnalyzer {
     if (charCodes && charCodes.length > 50) {
       report.findings.push({
         check: 'Obfuscation',
-        severity: 'medium',
+        severity: 'critical',
         message: `High density of octal character escapes (${charCodes.length}×) — possible obfuscation`
       });
       obfuscationScore += 10;
@@ -413,7 +619,7 @@ class PDFAnalyzer {
       if (lower.includes(keyword)) {
         report.findings.push({
           check: 'Content Heuristics',
-          severity: 'medium',
+          severity: 'critical',
           message: `Suspicious phrase found in CV text: "${keyword}"`
         });
         hits++;
@@ -437,7 +643,7 @@ class PDFAnalyzer {
     if (sizePerPage > 3000) {
       report.findings.push({
         check: 'Structure Analysis',
-        severity: 'medium',
+        severity: 'critical',
         message: `Unusually large file size per page (${Math.round(sizePerPage)} KB/page) — may contain hidden payloads`
       });
       report.score += 10;
@@ -447,18 +653,23 @@ class PDFAnalyzer {
     if (pages > 20 && sizeKB < 50) {
       report.findings.push({
         check: 'Structure Analysis',
-        severity: 'medium',
+        severity: 'critical',
         message: `Claims ${pages} pages but only ${Math.round(sizeKB)} KB — likely crafted/malformed`
       });
       report.score += 10;
     }
 
+    // DEBUG: Log extracted text to debug missing injection detection
+    console.log('--- EXTRACTED PDF TEXT START ---');
+    console.log(pdfData.text.substring(pdfData.text.length - 500)); // Log last 500 chars (where prompt usually lies)
+    console.log('--- EXTRACTED PDF TEXT END ---');
+
     // Count obj definitions in raw stream
     const objCount = (buffer.toString('latin1').match(/\d+ \d+ obj/g) || []).length;
-    if (objCount > pages * 100) {
+    if (objCount > pages * 1000) {
       report.findings.push({
         check: 'Structure Analysis',
-        severity: 'medium',
+        severity: 'critical',
         message: `Excessive object count (${objCount} objects for ${pages} pages) — may contain hidden streams`
       });
       report.score += 10;
@@ -481,13 +692,13 @@ class PDFAnalyzer {
     for (const { name, patterns } of categories) {
       let categoryFindings = 0;
       for (const { pattern, label } of patterns) {
-        // Reset regex lastIndex for global patterns
-        pattern.lastIndex = 0;
+        // Reset regex lastIndex so global patterns don't carry state between runs
+        if (typeof pattern.lastIndex !== 'undefined') pattern.lastIndex = 0;
         const matches = text.match(pattern);
         if (matches && matches.length > 0) {
           report.findings.push({
             check: 'Injection Detection',
-            severity: 'high',
+            severity: 'critical',
             message: `${name}: ${label} (${matches.length}× found)`,
             count: matches.length,
             category: name
@@ -506,7 +717,7 @@ class PDFAnalyzer {
   /* ─────────────────────────────────────────────
    * CHECK 9 – Encoded Payload Detection
    * ────────────────────────────────────────────── */
-  _checkEncodedPayloads(text, report) {
+  _checkEncodedPayloads(text, extractedTextOnly, report) {
     let findings = 0;
 
     // Detect base64-encoded strings (minimum 20 chars to avoid false positives)
@@ -537,16 +748,7 @@ class PDFAnalyzer {
       } catch { /* not valid base64 – ignore */ }
     }
 
-    // Also flag high number of base64-like strings
-    if (b64Matches.length > 3) {
-      report.findings.push({
-        check: 'Encoded Payload',
-        severity: 'medium',
-        message: `${b64Matches.length} base64-encoded strings found in CV text — unusual for a resume`,
-        category: 'Encoded Payload'
-      });
-      findings++;
-    }
+    // (Removed bulk base64 count check to avoid false positives with LaTeX/embedded fonts)
 
     if (findings > 0) {
       report.score += Math.min(findings * 10, 20);
@@ -556,15 +758,16 @@ class PDFAnalyzer {
   /* ─────────────────────────────────────────────
    * CHECK 10 – Unicode Obfuscation Detection
    * ────────────────────────────────────────────── */
-  _checkUnicodeObfuscation(text, report) {
-    // Detect fullwidth Unicode characters (U+FF01–U+FF5E)
+  _checkUnicodeObfuscation(text, rawUtf8, report) {
+    // Scan both extracted text and raw buffer (UTF-8) so we catch fullwidth in streams
+    const toScan = [text, rawUtf8].filter(Boolean).join('\n');
     const fullwidthRegex = /[\uFF01-\uFF5E]{2,}/g;
-    const fwMatches = text.match(fullwidthRegex) || [];
+    const fwMatches = toScan.match(fullwidthRegex) || [];
 
     if (fwMatches.length === 0) return;
 
     // Normalize fullwidth → ASCII and check for injection patterns
-    const normalised = text.replace(/[\uFF01-\uFF5E]/g, ch =>
+    const normalised = toScan.replace(/[\uFF01-\uFF5E]/g, ch =>
       String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)
     );
 
@@ -579,6 +782,7 @@ class PDFAnalyzer {
 
     let found = false;
     for (const { pattern, label } of obfuscatedInjections) {
+      pattern.lastIndex = 0;
       if (pattern.test(normalised)) {
         report.findings.push({
           check: 'Unicode Obfuscation',
@@ -593,13 +797,125 @@ class PDFAnalyzer {
     if (!found && fwMatches.length > 0) {
       report.findings.push({
         check: 'Unicode Obfuscation',
-        severity: 'medium',
+        severity: 'critical',
         message: `${fwMatches.length} fullwidth Unicode sequences found — may be used to evade text-based filters`,
         category: 'Unicode Obfuscation'
       });
     }
 
-    report.score += found ? 15 : 5;
+    if (fwMatches.length > 0) {
+      report.score += found ? 15 : 5;
+    }
+  }
+
+  /* ─────────────────────────────────────────────
+   * CHECK 11 – Data Leak / Sensitive Data Exposure
+   * ────────────────────────────────────────────── */
+  _checkDataLeakPatterns(text, raw, report) {
+    let findings = 0;
+
+    for (const { pattern, label, minMatches, validator } of this.dataLeakPatterns) {
+      if (typeof pattern.lastIndex !== 'undefined') pattern.lastIndex = 0;
+      const matches = text.match(pattern) || [];
+      const threshold = minMatches || 1;
+      // If a validator function is provided, filter matches through it
+      const validMatches = validator ? matches.filter(validator) : matches;
+      if (validMatches.length >= threshold) {
+        report.findings.push({
+          check: 'Data Leak Detection',
+          severity: 'critical',
+          message: `${label}: ${validMatches.length}× found in document`,
+          count: validMatches.length,
+          category: 'Data Leak'
+        });
+        findings++;
+      }
+    }
+
+    if (findings > 0) {
+      report.score += Math.min(findings * 10, 30);
+    }
+  }
+
+  /* ─────────────────────────────────────────────
+   * CHECK 12 – Advanced Injection Detection
+   *   (SSRF, Path Traversal, XXE, LDAP, SSTI,
+   *    Deserialization, Macro/VBA)
+   * ────────────────────────────────────────────── */
+  _checkAdvancedInjections(text, raw, report) {
+    const categories = [
+      { name: 'SSRF Detection', patterns: this.ssrfPatterns },
+      { name: 'Path Traversal', patterns: this.pathTraversalPatterns },
+      { name: 'XXE / XML Injection', patterns: this.xmlInjectionPatterns },
+      { name: 'LDAP Injection', patterns: this.ldapInjectionPatterns },
+      { name: 'SSTI Detection', patterns: this.sstiPatterns },
+      { name: 'Deserialization Attack', patterns: this.deserializationPatterns },
+      { name: 'Macro / VBA Detection', patterns: this.macroVBAPatterns }
+    ];
+
+    for (const { name, patterns } of categories) {
+      let categoryFindings = 0;
+      for (const { pattern, label } of patterns) {
+        if (typeof pattern.lastIndex !== 'undefined') pattern.lastIndex = 0;
+        const matches = text.match(pattern);
+        if (matches && matches.length > 0) {
+          report.findings.push({
+            check: name,
+            severity: 'critical',
+            message: `${name}: ${label} (${matches.length}× found)`,
+            count: matches.length,
+            category: name
+          });
+          categoryFindings++;
+        }
+      }
+      if (categoryFindings > 0) {
+        report.score += Math.min(categoryFindings * 10, 25);
+      }
+    }
+  }
+
+  /* ─────────────────────────────────────────────
+   * CHECK 13 – Phishing & Social Engineering
+   *   (Phishing, Crypto/Ransomware)
+   * ────────────────────────────────────────────── */
+  _checkPhishingSocialEngineering(text, report) {
+    // Phishing patterns
+    let phishingHits = 0;
+    for (const { pattern, label } of this.phishingPatterns) {
+      if (typeof pattern.lastIndex !== 'undefined') pattern.lastIndex = 0;
+      const matches = text.match(pattern);
+      if (matches && matches.length > 0) {
+        report.findings.push({
+          check: 'Phishing / Social Engineering',
+          severity: 'critical',
+          message: `${label} (${matches.length}× found)`,
+          count: matches.length,
+          category: 'Phishing'
+        });
+        phishingHits++;
+      }
+    }
+
+    // Crypto / Ransomware patterns
+    let cryptoHits = 0;
+    for (const { pattern, label } of this.cryptoRansomPatterns) {
+      if (typeof pattern.lastIndex !== 'undefined') pattern.lastIndex = 0;
+      const matches = text.match(pattern);
+      if (matches && matches.length > 0) {
+        report.findings.push({
+          check: 'Crypto / Ransomware',
+          severity: 'critical',
+          message: `${label} (${matches.length}× found)`,
+          count: matches.length,
+          category: 'Ransomware'
+        });
+        cryptoHits++;
+      }
+    }
+
+    if (phishingHits > 0) report.score += Math.min(phishingHits * 10, 25);
+    if (cryptoHits > 0) report.score += Math.min(cryptoHits * 10, 25);
   }
 
   /* ─────────────────────────────────────────────
@@ -673,6 +989,36 @@ class PDFAnalyzer {
     }
     if (checks.has('Unicode Obfuscation')) {
       recs.push('🔤 Fullwidth Unicode obfuscation detected — attacker may be trying to bypass text-based security filters.');
+    }
+    if (checks.has('Data Leak Detection')) {
+      recs.push('🔓 Sensitive data detected (SSN, credit cards, API keys, tokens, or connection strings). This document may be a data exfiltration attempt.');
+    }
+    if (checks.has('SSRF Detection')) {
+      recs.push('🌐 SSRF patterns detected — internal/private network URLs or cloud metadata endpoints found. Do NOT process this document through server-side URL fetching.');
+    }
+    if (checks.has('Path Traversal')) {
+      recs.push('📂 Path traversal sequences detected — attacker may be attempting to access sensitive system files.');
+    }
+    if (checks.has('XXE / XML Injection')) {
+      recs.push('📄 XML External Entity (XXE) injection patterns detected — do NOT parse this document with XML parsers that allow external entities.');
+    }
+    if (checks.has('LDAP Injection')) {
+      recs.push('🔑 LDAP injection patterns detected — do NOT use document content in LDAP queries.');
+    }
+    if (checks.has('SSTI Detection')) {
+      recs.push('⚙️ Server-Side Template Injection patterns detected — do NOT render document content through template engines.');
+    }
+    if (checks.has('Deserialization Attack')) {
+      recs.push('💣 Serialized object / deserialization attack patterns detected — this document may contain executable payloads.');
+    }
+    if (checks.has('Phishing / Social Engineering')) {
+      recs.push('🎣 Phishing / social engineering language detected — this document is designed to deceive and manipulate the reader.');
+    }
+    if (checks.has('Crypto / Ransomware')) {
+      recs.push('💰 Cryptocurrency wallet addresses or ransomware language detected — this may be a ransom demand or crypto scam.');
+    }
+    if (checks.has('Macro / VBA Detection')) {
+      recs.push('🦠 Macro/VBA or LOLBin (living-off-the-land binary) execution patterns detected — quarantine immediately.');
     }
     if (report.riskLevel === 'safe') {
       recs.push('✅ No immediate threats detected. Standard resume processing can proceed.');
