@@ -72,13 +72,23 @@
      * ────────────────────────────────────────────── */
     function handleFile(file) {
         // Validate type
-        if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-            showToast('❌ Only PDF files are accepted');
+        const validTypes = [
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'text/plain'
+        ];
+        const validExts = ['.pdf', '.docx', '.txt'];
+
+        const isTypeValid = validTypes.includes(file.type);
+        const isExtValid = validExts.some(ext => file.name.toLowerCase().endsWith(ext));
+
+        if (!isTypeValid && !isExtValid) {
+            showToast('❌ Only PDF, DOCX, and TXT files are accepted');
             return;
         }
-        // Validate size (10 MB)
-        if (file.size > 10 * 1024 * 1024) {
-            showToast('❌ File exceeds 10 MB limit');
+        // Validate size (15 MB)
+        if (file.size > 15 * 1024 * 1024) {
+            showToast('❌ File exceeds 15 MB limit');
             return;
         }
 
@@ -207,6 +217,43 @@
       `).join('');
         }
         findingsCount.textContent = `${report.findings.length} finding${report.findings.length !== 1 ? 's' : ''}`;
+
+        // ── Sanitization status card ──
+        const sanitizationBadge = document.getElementById('sanitizationBadge');
+        const sanitizationDetails = document.getElementById('sanitizationDetails');
+        const isolationTemplateWrapper = document.getElementById('isolationTemplateWrapper');
+        const isolationTemplate = document.getElementById('isolationTemplate');
+        const copyTemplateBtn = document.getElementById('copyTemplateBtn');
+
+        if (report.safeForLLM) {
+            sanitizationBadge.className = 'sanitization-badge badge-safe';
+            sanitizationBadge.innerHTML = '✅ Safe for Processing';
+            sanitizationDetails.innerHTML = '<p class="sanitization-clean">No injection patterns detected — content is clean for downstream use.</p>';
+            isolationTemplateWrapper.classList.add('hidden');
+        } else {
+            const logCount = (report.sanitizationLog || []).length;
+            const totalRedacted = (report.sanitizationLog || []).reduce((sum, e) => sum + e.count, 0);
+            sanitizationBadge.className = 'sanitization-badge badge-warning';
+            sanitizationBadge.innerHTML = `⚠️ Sanitized — ${totalRedacted} injection${totalRedacted !== 1 ? 's' : ''} neutralized (${logCount} pattern${logCount !== 1 ? 's' : ''})`;
+            sanitizationDetails.innerHTML = (report.sanitizationLog || []).map(entry =>
+                `<div class="sanitization-entry">
+                    <span class="sanitization-label">${escapeHtml(entry.label)}</span>
+                    <span class="sanitization-count">${entry.count}×</span>
+                </div>`
+            ).join('');
+
+            if (report.contentIsolationTemplate) {
+                isolationTemplateWrapper.classList.remove('hidden');
+                isolationTemplate.textContent = report.contentIsolationTemplate;
+                copyTemplateBtn.onclick = () => {
+                    navigator.clipboard.writeText(report.contentIsolationTemplate)
+                        .then(() => showToast('📋 Template copied to clipboard'))
+                        .catch(() => showToast('❌ Copy failed'));
+                };
+            } else {
+                isolationTemplateWrapper.classList.add('hidden');
+            }
+        }
 
         // ── Update sidebar ──
         scanCount++;

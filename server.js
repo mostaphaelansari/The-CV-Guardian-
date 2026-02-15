@@ -15,14 +15,22 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Multer – memory storage (no files written to disk) ──
+const ALLOWED_MIMES = [
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain'
+];
+const ALLOWED_EXTS = ['.pdf', '.docx', '.txt'];
+
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: MAX_FILE_SIZE },
     fileFilter: (_req, file, cb) => {
-        if (file.mimetype === 'application/pdf' || path.extname(file.originalname).toLowerCase() === '.pdf') {
+        const ext = path.extname(file.originalname).toLowerCase();
+        if (ALLOWED_MIMES.includes(file.mimetype) || ALLOWED_EXTS.includes(ext)) {
             cb(null, true);
         } else {
-            cb(new Error('Only PDF files are allowed'), false);
+            cb(new Error('Only PDF, DOCX, and TXT files are allowed'), false);
         }
     }
 });
@@ -52,7 +60,7 @@ app.post('/api/analyze', upload.single('pdf'), async (req, res) => {
 
         res.json(report);
     } catch (err) {
-        if (err.message === 'Only PDF files are allowed') {
+        if (err.message === 'Only PDF, DOCX, and TXT files are allowed') {
             return res.status(400).json({ error: err.message });
         }
         console.error('Analysis error:', err);
