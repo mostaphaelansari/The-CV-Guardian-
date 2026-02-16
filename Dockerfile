@@ -15,6 +15,7 @@ WORKDIR /usr/src/app
 
 COPY --from=builder /usr/src/app/node_modules ./node_modules
 COPY --from=builder /usr/src/app/src ./src
+COPY --from=builder /usr/src/app/analyzer ./analyzer
 COPY --from=builder /usr/src/app/public ./public
 COPY --from=builder /usr/src/app/package.json ./
 # Copy server.js if it's the entry point outside src, or adjust path
