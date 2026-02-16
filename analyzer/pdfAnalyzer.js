@@ -9,7 +9,7 @@ class PDFAnalyzer {
 
   constructor() {
     // ── Suspicious URL patterns ──
-    this.suspiciousExtensions = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.com', '.vbs', '.js', '.wsf', '.msi', '.ps1'];
+    this.suspiciousExtensions = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.vbs', '.wsf', '.msi', '.ps1'];
     this.urlShorteners = ['bit.ly', 'tinyurl.com', 'goo.gl', 't.co', 'ow.ly', 'is.gd', 'buff.ly', 'rebrand.ly', 'shorturl.at'];
 
     // ── Dangerous PDF operators / dictionary keys ──
@@ -309,15 +309,21 @@ class PDFAnalyzer {
     const urlsToScan = urls.slice(0, 5);
 
     for (const url of urlsToScan) {
+      if (url.toLowerCase().includes('linkedin.com')) continue; // Skip LinkedIn to avoid false positives
+
       const result = await virusTotalService.scanUrl(url);
-      if (result && (result.malicious || result.suspicious)) {
-        report.findings.push({
-          check: 'VirusTotal Scan',
-          severity: result.malicious ? 'critical' : 'high',
-          message: `Malicious URL detected by VirusTotal: ${url} (Malicious: ${result.stats.malicious}, Suspicious: ${result.stats.suspicious})`,
-          category: 'External Intelligence'
-        });
-        report.score += result.malicious ? 50 : 25;
+      if (result && result.stats) {
+        // Stricter threshold: require at least 2 malicious votes to flag
+        const isMalicious = result.stats.malicious >= 2;
+        if (isMalicious) {
+          report.findings.push({
+            check: 'VirusTotal Scan',
+            severity: 'critical',
+            message: `Malicious URL detected by VirusTotal: ${url} (Malicious: ${result.stats.malicious}, Suspicious: ${result.stats.suspicious})`,
+            category: 'External Intelligence'
+          });
+          report.score += 50;
+        }
       }
     }
   }
@@ -445,6 +451,7 @@ class PDFAnalyzer {
     report.score += highCount * 8;
     if (criticalCount > 0) report.score = Math.max(report.score, 75);
     else if (highCount > 0) report.score = Math.max(report.score, 55);
+
     // ANY security finding from ANY check → force score to 100 (CRITICAL)
     const attackChecks = [
       'JavaScript Detection', 'Suspicious URLs', 'Embedded Objects',
@@ -456,8 +463,14 @@ class PDFAnalyzer {
       'Phishing / Social Engineering', 'Crypto / Ransomware',
       'Macro / VBA Detection'
     ];
-    const hasAttackFinding = report.findings.some(f => attackChecks.includes(f.check));
-    if (hasAttackFinding) report.score = 100;
+    // ONLY force score to 100 if the finding is Critical or High
+    const hasCriticalAttack = report.findings.some(f =>
+      attackChecks.includes(f.check) && (f.severity === 'critical' || f.severity === 'high')
+    );
+
+    if (hasCriticalAttack) {
+      report.score = 100;
+    }
     // ── Check if PDF has 0 pages (CRITICAL) ──
     if (report.pageCount === 0) {
       report.findings.push({
@@ -472,6 +485,8 @@ class PDFAnalyzer {
     report.riskLevel = this._riskLevel(report.score);
     report.summary = this._buildSummary(report);
     report.recommendations = this._buildRecommendations(report);
+
+    return report;
 
     // ── Sanitization layer: neutralize injections in extracted text ──
     const { sanitizedText, sanitizationLog } = this._sanitizeText(combinedText);
@@ -619,14 +634,18 @@ class PDFAnalyzer {
     });
 
     for (const { key, count } of trulyDangerous) {
-      const severity = ['/Launch', '/JavaScript', '/JS', '/EmbeddedFile', '/OpenAction', '/AA'].includes(key)
-        ? 'critical'
-        : 'high';
+      let severity = 'high';
+
+      if (['/Launch', '/JavaScript', '/JS'].includes(key)) {
+        severity = 'critical';
+      } else if (['/OpenAction', '/AA'].includes(key)) {
+        severity = 'medium';
+      }
 
       report.findings.push({
         check: 'Embedded Objects',
         severity,
-        message: `Found ${count}× dangerous PDF key: ${key}`,
+        message: `Found ${count}× suspicious PDF key: ${key}`,
         count
       });
     }

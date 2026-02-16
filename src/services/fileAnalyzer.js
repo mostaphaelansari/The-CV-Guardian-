@@ -250,15 +250,21 @@ class FileAnalyzer {
         const urlsToScan = urls.slice(0, 5);
 
         for (const url of urlsToScan) {
+            if (url.toLowerCase().includes('linkedin.com')) continue; // Skip LinkedIn to avoid false positives
+
             const result = await virusTotalService.scanUrl(url);
-            if (result && (result.malicious || result.suspicious)) {
-                report.findings.push({
-                    check: 'VirusTotal Scan',
-                    severity: result.malicious ? 'critical' : 'high',
-                    message: `Malicious URL detected by VirusTotal: ${url} (Malicious: ${result.stats.malicious}, Suspicious: ${result.stats.suspicious})`,
-                    category: 'External Intelligence'
-                });
-                report.score += result.malicious ? 50 : 25;
+            if (result && result.stats) {
+                // Stricter threshold: require at least 2 malicious votes to flag
+                const isMalicious = result.stats.malicious >= 2;
+                if (isMalicious) {
+                    report.findings.push({
+                        check: 'VirusTotal Scan',
+                        severity: 'critical',
+                        message: `Malicious URL detected by VirusTotal: ${url} (Malicious: ${result.stats.malicious}, Suspicious: ${result.stats.suspicious})`,
+                        category: 'External Intelligence'
+                    });
+                    report.score += 50;
+                }
             }
         }
     }

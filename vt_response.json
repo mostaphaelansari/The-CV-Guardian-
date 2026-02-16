@@ -1,0 +1,13 @@
+{
+  "malicious": false,
+  "suspicious": false,
+  "harmless": true,
+  "stats": {
+    "malicious": 0,
+    "suspicious": 0,
+    "undetected": 26,
+    "harmless": 68,
+    "timeout": 0
+  },
+  "scanDate": 1771278282
+}
