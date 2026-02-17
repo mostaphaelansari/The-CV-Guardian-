@@ -139,4 +139,26 @@ router.get('/reports', reportController.getAllReports);
  */
 router.get('/reports/:id', reportController.getReportById);
 
+router.post('/scan-url', async (req, res) => {
+    const { url } = req.body;
+    if (!url) {
+        return res.status(400).json({ error: 'Missing "url" in request body' });
+    }
+
+    try {
+        const virusTotalService = require('../services/virusTotalService');
+        const result = await virusTotalService.scanUrl(url);
+
+        if (!result) {
+            // Null result usually means API key missing or error handled internally
+            return res.status(503).json({ error: 'Scan service unavailable or API key missing' });
+        }
+
+        res.json(result);
+    } catch (error) {
+        console.error('API Scan Error:', error);
+        res.status(500).json({ error: 'Internal server error during scan' });
+    }
+});
+
 module.exports = router;

@@ -441,6 +441,10 @@ class PDFAnalyzer {
     this._checkAdvancedInjections(combinedText, rawBuffer, report);
     this._checkPhishingSocialEngineering(combinedText, report);
 
+    // ── OLD Check 14: VirusTotal URL Scan (async) ──
+    // ── NEW Check 15: AI-Generation Risk Scoring ──
+    this._scoreAIGeneration(combinedText, report);
+
     // ── Check 14: VirusTotal URL Scan (async) ──
     await this._checkVirusTotal(combinedText, rawBuffer, report);
 
@@ -635,24 +639,46 @@ class PDFAnalyzer {
 
     for (const { key, count } of trulyDangerous) {
       let severity = 'high';
+      let message = `Found ${count}× suspicious PDF key: ${key}`;
 
       if (['/Launch', '/JavaScript', '/JS'].includes(key)) {
         severity = 'critical';
       } else if (['/OpenAction', '/AA'].includes(key)) {
-        severity = 'medium';
+        // ── Smart Context Check ──
+        // Check if OpenAction/AA triggers JavaScript/Launch (Critical) or URI (High)
+        // Note: This regex checks for inline dictionaries. Reference-based actions (e.g. 10 0 R) 
+        // rely on the separate /JavaScript check catching the target object.
+        const triggersJS = new RegExp(`${key}\\s*<<[\\s\\S]*?\\/S\\s*(?:\\/JavaScript|\\/JS|\\/Launch)`, 'i').test(raw);
+        const triggersURI = new RegExp(`${key}\\s*<<[\\s\\S]*?\\/S\\s*\\/URI`, 'i').test(raw);
+
+        if (triggersJS) {
+          severity = 'critical';
+          message += ' (Context: Auto-execution/JS detected)';
+        } else if (triggersURI) {
+          severity = 'high';
+          message += ' (Context: Auto-opening URI detected)';
+        } else {
+          severity = 'low'; // Downgrade benign view settings (e.g. /Fit, /GoTo) to Low
+          message += ' (Context: Benign view setting)';
+        }
       }
 
       report.findings.push({
         check: 'Embedded Objects',
         severity,
-        message: `Found ${count}× suspicious PDF key: ${key}`,
+        message,
         count
       });
     }
 
     if (trulyDangerous.length > 0) {
-      const hasCritical = trulyDangerous.some(d => ['/Launch', '/JavaScript', '/JS', '/EmbeddedFile'].includes(d.key));
-      report.score += hasCritical ? 30 : 15;
+      // Calculate score boost based on max severity found
+      const hasCritical = report.findings.some(f => f.check === 'Embedded Objects' && f.severity === 'critical');
+      const hasHigh = report.findings.some(f => f.check === 'Embedded Objects' && f.severity === 'high');
+
+      if (hasCritical) report.score += 30;
+      else if (hasHigh) report.score += 15;
+      else report.score += 5; // Low severity boost
     }
   }
 
@@ -1182,6 +1208,9 @@ class PDFAnalyzer {
     const recs = [];
     const checks = new Set(report.findings.map(f => f.check));
 
+    if (checks.has('AI-Generation Analysis')) {
+      recs.push('🤖 This CV appears to be bot-generated or created by an AI tool. Request the candidate to submit an original, human-written CV. Consider verifying authorship during the interview process.');
+    }
     if (checks.has('JavaScript Detection')) {
       recs.push('🚫 Do NOT open this PDF in Adobe Acrobat. Use a sandboxed PDF viewer.');
     }
@@ -1225,22 +1254,363 @@ class PDFAnalyzer {
       recs.push('⚙️ Server-Side Template Injection patterns detected — do NOT render document content through template engines.');
     }
     if (checks.has('Deserialization Attack')) {
-      recs.push('💣 Serialized object / deserialization attack patterns detected — this document may contain executable payloads.');
+      recs.push('🧩 Deserialization attack patterns detected — do NOT unserialize this document content.');
     }
     if (checks.has('Phishing / Social Engineering')) {
-      recs.push('🎣 Phishing / social engineering language detected — this document is designed to deceive and manipulate the reader.');
+      recs.push('🎣 Phishing/Social Engineering detected — document attempts to urgent/manipulative actions.');
     }
     if (checks.has('Crypto / Ransomware')) {
-      recs.push('💰 Cryptocurrency wallet addresses or ransomware language detected — this may be a ransom demand or crypto scam.');
+      recs.push('💰 Crypto/Ransomware language detected — verify sender identity before proceeding.');
     }
     if (checks.has('Macro / VBA Detection')) {
-      recs.push('🦠 Macro/VBA or LOLBin (living-off-the-land binary) execution patterns detected — quarantine immediately.');
+      recs.push('📜 Macros detected — ensure macros are disabled before viewing.');
     }
     if (report.riskLevel === 'safe') {
       recs.push('✅ No immediate threats detected. Standard resume processing can proceed.');
     }
 
     return recs;
+  }
+
+  /* ══════════════════════════════════════════════════════
+   * CHECK 15 – AI-Generation Risk Scoring Framework
+   * 7 dimensions, each scored 0–5, total 0–50 (excl. cross-consistency)
+   * ══════════════════════════════════════════════════════ */
+  _scoreAIGeneration(text, report) {
+    if (!text || text.length < 100) return;
+
+    const lower = text.toLowerCase();
+    const words = text.split(/\s+/).filter(w => w.length > 0);
+    const wordCount = words.length;
+    const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 5);
+
+    const aiScore = {
+      dimensions: {},
+      total: 0,
+      riskLabel: 'Likely Human'
+    };
+
+    // ═══════════════════════════════════════════
+    // 1.1 – Buzzword Density (0–5)
+    // ═══════════════════════════════════════════
+    aiScore.dimensions['1.1_buzzword_density'] = this._aiBuzzwordDensity(lower, wordCount);
+
+    // ═══════════════════════════════════════════
+    // 1.2 – Sentence Uniformity (0–5)
+    // ═══════════════════════════════════════════
+    aiScore.dimensions['1.2_sentence_uniformity'] = this._aiSentenceUniformity(sentences);
+
+    // ═══════════════════════════════════════════
+    // 1.3 – Friction Absence (0–5)
+    // ═══════════════════════════════════════════
+    aiScore.dimensions['1.3_friction_absence'] = this._aiFrictionAbsence(lower, wordCount);
+
+    // ═══════════════════════════════════════════
+    // 2.1 – Tool Specificity (0–5)
+    // ═══════════════════════════════════════════
+    aiScore.dimensions['2.1_tool_specificity'] = this._aiToolSpecificity(lower, text);
+
+    // ═══════════════════════════════════════════
+    // 2.2 – Scale Realism (0–5)
+    // ═══════════════════════════════════════════
+    aiScore.dimensions['2.2_scale_realism'] = this._aiScaleRealism(lower, text);
+
+    // ═══════════════════════════════════════════
+    // 2.3 – Timeline Plausibility (0–5)
+    // ═══════════════════════════════════════════
+    aiScore.dimensions['2.3_timeline_plausibility'] = this._aiTimelinePlausibility(lower, text);
+
+    // ═══════════════════════════════════════════
+    // 4 – Stylometric Indicators (0–5)
+    // ═══════════════════════════════════════════
+    aiScore.dimensions['4.0_stylometric'] = this._aiStylometric(sentences, words);
+
+    // ═══════════════════════════════════════════
+    // 3 – Cross-Consistency (manual only)
+    // ═══════════════════════════════════════════
+    aiScore.dimensions['3.0_cross_consistency'] = null; // requires external data
+
+    // ── Total ──
+    aiScore.total = Object.values(aiScore.dimensions)
+      .filter(v => v !== null)
+      .reduce((sum, v) => sum + v, 0);
+
+    // ── Risk label mapping ──
+    if (aiScore.total >= 36) aiScore.riskLabel = 'Highly AI-Generated';
+    else if (aiScore.total >= 26) aiScore.riskLabel = 'Likely AI-Assisted';
+    else if (aiScore.total >= 16) aiScore.riskLabel = 'Mixed / Assisted';
+    else aiScore.riskLabel = 'Likely Human';
+
+    // ── Store on report ──
+    report.aiScore = aiScore;
+
+    // ── Map to findings and score contribution ──
+    if (aiScore.total >= 36) {
+      report.findings.push({
+        check: 'AI-Generation Analysis',
+        severity: 'high',
+        message: `AI-generation risk: ${aiScore.total}/35 — ${aiScore.riskLabel}. This CV shows strong indicators of being entirely AI-generated.`,
+        category: 'AI Detection'
+      });
+      report.score += 25;
+    } else if (aiScore.total >= 26) {
+      report.findings.push({
+        check: 'AI-Generation Analysis',
+        severity: 'high',
+        message: `AI-generation risk: ${aiScore.total}/35 — ${aiScore.riskLabel}. Significant portions of this CV appear machine-written.`,
+        category: 'AI Detection'
+      });
+      report.score += 15;
+    } else if (aiScore.total >= 16) {
+      report.findings.push({
+        check: 'AI-Generation Analysis',
+        severity: 'medium',
+        message: `AI-generation risk: ${aiScore.total}/35 — ${aiScore.riskLabel}. Some sections may have been AI-assisted.`,
+        category: 'AI Detection'
+      });
+      report.score += 5;
+    }
+    // 0–15: Likely Human → no finding, no score penalty
+  }
+
+  /* ─── 1.1 Buzzword Density ──────────────────── */
+  _aiBuzzwordDensity(lower, wordCount) {
+    const buzzPhrases = [
+      'proven track record', 'results-driven', 'dynamic environment',
+      'leveraged synergies', 'synergy', 'paradigm', 'leverage',
+      'spearhead', 'orchestrate', 'streamline', 'optimize', 'innovate',
+      'disruption', 'scalable', 'holistic', 'robust', 'cutting-edge',
+      'best-in-class', 'world-class', 'thought leader', 'value-add',
+      'stakeholder', 'ecosystem', 'bandwidth', 'highly motivated',
+      'passionate about', 'committed to continuous', 'detail-oriented',
+      'self-starter', 'team player', 'go-getter', 'proactive',
+      'results-oriented', 'fast-paced', 'cross-functional',
+      'drive growth', 'deliver results', 'strong work ethic',
+      'excellent communication', 'interpersonal skills'
+    ];
+
+    let hits = 0;
+    for (const phrase of buzzPhrases) {
+      if (lower.includes(phrase)) hits++;
+    }
+
+    if (wordCount < 50) return 0;
+    const density = hits / (wordCount / 100); // hits per 100 words
+
+    if (density >= 4) return 5;
+    if (density >= 3) return 4;
+    if (density >= 2) return 3;
+    if (density >= 1) return 2;
+    if (hits >= 1) return 1;
+    return 0;
+  }
+
+  /* ─── 1.2 Sentence Uniformity ───────────────── */
+  _aiSentenceUniformity(sentences) {
+    if (sentences.length < 5) return 0;
+
+    // Measure sentence-length variance
+    const lengths = sentences.map(s => s.trim().split(/\s+/).length);
+    const mean = lengths.reduce((a, b) => a + b, 0) / lengths.length;
+    const variance = lengths.reduce((sum, l) => sum + Math.pow(l - mean, 2), 0) / lengths.length;
+    const cv = mean > 0 ? Math.sqrt(variance) / mean : 0; // coefficient of variation
+
+    // Check structural repetition ("Led X to Y by Z" pattern)
+    const structPatterns = sentences.map(s => {
+      const t = s.trim().toLowerCase();
+      // Extract first verb-like word
+      const match = t.match(/^\s*(?:[-•]\s*)?(\w+ed|managed|led|developed|built|created|designed|implemented|spearheaded|leveraged|orchestrated|drove|delivered)/);
+      return match ? match[1] : null;
+    }).filter(Boolean);
+
+    const uniqueStarters = new Set(structPatterns).size;
+    const repetitionRatio = structPatterns.length > 0
+      ? 1 - (uniqueStarters / structPatterns.length)
+      : 0;
+
+    // Low CV = uniform sentences (AI-like)
+    let score = 0;
+    if (cv < 0.2) score += 3;       // very uniform
+    else if (cv < 0.35) score += 2;  // somewhat uniform
+    else if (cv < 0.5) score += 1;   // mildly uniform
+
+    if (repetitionRatio > 0.6) score += 2;
+    else if (repetitionRatio > 0.4) score += 1;
+
+    return Math.min(score, 5);
+  }
+
+  /* ─── 1.3 Friction Absence ──────────────────── */
+  _aiFrictionAbsence(lower, wordCount) {
+    if (wordCount < 50) return 0;
+
+    // Words that indicate real-world friction (human CVs mention struggle)
+    const frictionMarkers = [
+      'debug', 'debugged', 'debugging', 'troubleshoot', 'troubleshooting',
+      'fix', 'fixed', 'bug', 'bugs', 'workaround', 'constraint',
+      'constraints', 'trade-off', 'tradeoff', 'trade-offs', 'limitation',
+      'limitations', 'challenge', 'challenging', 'struggled', 'difficulty',
+      'difficult', 'complex', 'complexity', 'refactor', 'refactored',
+      'failed', 'failure', 'mistake', 'issue', 'issues', 'bottleneck',
+      'technical debt', 'legacy', 'deprecated', 'breaking change',
+      'outage', 'incident', 'root cause', 'postmortem', 'hotfix',
+      'regression', 'edge case', 'edge cases', 'flaky'
+    ];
+
+    let frictionCount = 0;
+    for (const marker of frictionMarkers) {
+      if (lower.includes(marker)) frictionCount++;
+    }
+
+    // Polished-only phrases (AI loves these)
+    const polishedPhrases = [
+      'successfully', 'seamlessly', 'efficiently', 'effectively',
+      'significantly improved', 'dramatically increased',
+      'exceptional results', 'outstanding', 'flawlessly'
+    ];
+
+    let polishedCount = 0;
+    for (const phrase of polishedPhrases) {
+      if (lower.includes(phrase)) polishedCount++;
+    }
+
+    // High polished + low friction = AI-like
+    if (frictionCount === 0 && polishedCount >= 3) return 5;
+    if (frictionCount === 0 && polishedCount >= 1) return 4;
+    if (frictionCount === 0) return 3;
+    if (frictionCount <= 1 && polishedCount >= 2) return 2;
+    if (frictionCount <= 2) return 1;
+    return 0;
+  }
+
+  /* ─── 2.1 Tool Specificity ──────────────────── */
+  _aiToolSpecificity(lower, text) {
+    // Look for specific technical anchoring
+    let specificitySignals = 0;
+
+    // Version numbers (e.g., "Python 3.11", "Node 18", "React 18.2", "v2.3.1")
+    const versionMatches = text.match(/\b(?:v?\d+\.\d+(?:\.\d+)?)\b/g) || [];
+    if (versionMatches.length >= 3) specificitySignals += 2;
+    else if (versionMatches.length >= 1) specificitySignals += 1;
+
+    // Concrete libraries/tools (not just "Python" but "FastAPI", "SQLAlchemy", etc.)
+    const concreteTools = [
+      'fastapi', 'sqlalchemy', 'celery', 'redis', 'kafka', 'rabbitmq',
+      'webpack', 'babel', 'eslint', 'prettier', 'jest', 'pytest',
+      'terraform', 'ansible', 'kubernetes', 'k8s', 'helm', 'docker compose',
+      'nginx', 'gunicorn', 'uvicorn', 'pm2', 'systemd', 'grafana',
+      'prometheus', 'datadog', 'sentry', 'new relic', 'kibana',
+      'elasticsearch', 'postgresql', 'mysql', 'dynamodb', 'cassandra',
+      'scipy', 'pandas', 'numpy', 'scikit-learn', 'pytorch', 'tensorflow',
+      'airflow', 'dbt', 'spark', 'flink', 'beam', 'mlflow'
+    ];
+    let toolHits = 0;
+    for (const tool of concreteTools) {
+      if (lower.includes(tool)) toolHits++;
+    }
+    if (toolHits >= 5) specificitySignals += 2;
+    else if (toolHits >= 2) specificitySignals += 1;
+
+    // Architecture references
+    const archTerms = ['microservice', 'monolith', 'event-driven', 'pub/sub',
+      'cqrs', 'saga pattern', 'circuit breaker', 'load balancer', 'cdn',
+      'ci/cd', 'blue-green', 'canary deploy', 'service mesh', 'api gateway'];
+    let archHits = 0;
+    for (const term of archTerms) {
+      if (lower.includes(term)) archHits++;
+    }
+    if (archHits >= 2) specificitySignals += 1;
+
+    // Invert: high specificity = low score (human-like)
+    // 0 specificity signals = score 5 (AI-like)
+    const invertedScore = Math.max(0, 5 - specificitySignals);
+    return invertedScore;
+  }
+
+  /* ─── 2.2 Scale Realism ─────────────────────── */
+  _aiScaleRealism(lower, text) {
+    let scaleSignals = 0;
+
+    // Quantified metrics (users, requests, data volume)
+    const scalePatterns = [
+      /\b\d+[kKmMbB]?\s*(?:users|customers|clients|visitors|requests|rps|qps)/gi,
+      /\b\d+(?:\.\d+)?\s*(?:TB|GB|MB|terabytes|gigabytes|petabytes)/gi,
+      /\b\d+\s*(?:ms|milliseconds|seconds)\s*(?:latency|response|p99|p95|p50)/gi,
+      /\b\d+%\s*(?:reduction|increase|improvement|uptime|availability)/gi,
+      /\b\d+x\s*(?:faster|improvement|throughput|performance)/gi,
+      /\$\d+[kKmMbB]?\b/g, // dollar amounts
+      /\b\d+\s*(?:servers|nodes|instances|pods|containers|replicas)/gi
+    ];
+
+    for (const pattern of scalePatterns) {
+      const matches = text.match(pattern);
+      if (matches) scaleSignals += matches.length;
+    }
+
+    // Invert: more scale = lower score (human-like)
+    if (scaleSignals >= 5) return 0;
+    if (scaleSignals >= 3) return 1;
+    if (scaleSignals >= 2) return 2;
+    if (scaleSignals >= 1) return 3;
+    return 5; // no measurable scale at all
+  }
+
+  /* ─── 2.3 Timeline Plausibility ─────────────── */
+  _aiTimelinePlausibility(lower, text) {
+    // Count distinct role/job entries
+    const yearRanges = text.match(/\b20\d{2}\s*[-–—]\s*(?:20\d{2}|present|current|now)\b/gi) || [];
+    const roleKeywords = (text.match(/\b(?:senior|junior|lead|principal|staff|intern|manager|director|architect|engineer|developer|analyst|consultant)\b/gi) || []);
+
+    const uniqueRoles = new Set(roleKeywords.map(r => r.toLowerCase())).size;
+
+    // Too many roles in a short period = suspicious
+    // Heuristic: if they claim 6+ distinct roles, that's dense
+    if (uniqueRoles >= 8 && yearRanges.length <= 3) return 5; // many roles, few time ranges
+    if (uniqueRoles >= 6 && yearRanges.length <= 2) return 4;
+    if (uniqueRoles >= 5 && yearRanges.length <= 2) return 3;
+
+    // No timeline at all is also suspicious
+    if (yearRanges.length === 0 && uniqueRoles >= 3) return 3;
+    if (yearRanges.length === 0) return 2;
+
+    return 0; // realistic timeline
+  }
+
+  /* ─── 4.0 Stylometric Indicators ────────────── */
+  _aiStylometric(sentences, words) {
+    if (sentences.length < 5 || words.length < 50) return 0;
+
+    let score = 0;
+
+    // ── Sentence length variance (low = AI-like) ──
+    const sentLengths = sentences.map(s => s.trim().split(/\s+/).length);
+    const meanLen = sentLengths.reduce((a, b) => a + b, 0) / sentLengths.length;
+    const stdDev = Math.sqrt(sentLengths.reduce((sum, l) => sum + Math.pow(l - meanLen, 2), 0) / sentLengths.length);
+
+    if (stdDev < 3) score += 2;       // very smooth (AI)
+    else if (stdDev < 5) score += 1;   // somewhat smooth
+
+    // ── Type-token ratio (lower = more repetitive vocabulary = AI-like) ──
+    const lowerWords = words.map(w => w.toLowerCase().replace(/[^a-z]/g, '')).filter(w => w.length > 2);
+    const uniqueWords = new Set(lowerWords).size;
+    const ttr = lowerWords.length > 0 ? uniqueWords / lowerWords.length : 1;
+
+    if (ttr < 0.35) score += 2;       // very repetitive vocabulary
+    else if (ttr < 0.50) score += 1;   // somewhat repetitive
+
+    // ── Burstiness: variation in sentence length differences (low = AI) ──
+    if (sentLengths.length >= 3) {
+      const diffs = [];
+      for (let i = 1; i < sentLengths.length; i++) {
+        diffs.push(Math.abs(sentLengths[i] - sentLengths[i - 1]));
+      }
+      const meanDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+      const burstiness = Math.sqrt(diffs.reduce((sum, d) => sum + Math.pow(d - meanDiff, 2), 0) / diffs.length);
+
+      if (burstiness < 2) score += 1; // very smooth transitions (AI)
+    }
+
+    return Math.min(score, 5);
   }
 }
 

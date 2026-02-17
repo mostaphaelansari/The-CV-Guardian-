@@ -40,6 +40,10 @@ const upload = multer({
 const reports = new Map();
 const analyzer = new PDFAnalyzer();
 
+// ── Mount API Routes ──
+const apiRoutes = require('./src/routes/api');
+app.use('/api', apiRoutes);
+
 /* ──────────────────────────────────────────────
  * POST /api/analyze  — upload & analyse a PDF
  * ─────────────────────────────────────────────── */
