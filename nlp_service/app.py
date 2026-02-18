@@ -12,11 +12,10 @@ logging.basicConfig(level=logging.INFO)
 # and maybe a zero-shot classifier for specific labels.
 
 try:
-    # classifier = pipeline("text-classification", model="distilbert-base-uncased-finetuned-sst-2-english")
-    # Using a zero-shot classifier requires more resources but is more flexible.
-    # Let's start with a smaller, faster model for sentiment as a placeholder for "semantic analysis".
-    classifier = pipeline("sentiment-analysis") 
-    logging.info("NLP Model loaded successfully.")
+    # Use the specialized prompt injection detection model
+    # Labels are typically "INJECTION" and "SAFE" (or similar, checking output structure)
+    classifier = pipeline("text-classification", model="protectai/deberta-v3-base-prompt-injection")
+    logging.info("NLP Model (protectai/deberta-v3-base-prompt-injection) loaded successfully.")
 except Exception as e:
     logging.error(f"Failed to load NLP model: {e}")
     classifier = None
@@ -32,11 +31,18 @@ def analyze():
     if not text:
         return jsonify({'error': 'No text provided'}), 400
 
-    # limit text length for performance
-    truncated_text = text[:512] 
+    # Truncate to 512 tokens (DeBERTa limit)
+    # Note: simple char truncation might cut tokens mid-way but is safer than crashing
+    truncated_text = text[:1024] 
     
     try:
+        # Classifier returns list of dicts: [{'label': 'INJECTION', 'score': 0.99}]
+        # or [{'label': 'SAFE', 'score': 0.99}]
         result = classifier(truncated_text)
+        
+        # Log the result for debugging/verification
+        logging.info(f"Analysis result: {result}")
+        
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500

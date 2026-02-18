@@ -16,7 +16,7 @@ Recruitment pipelines are a high-value attack surface. Malicious actors embed:
 
 Meanwhile, the rise of AI-generated resumes creates a separate problem: **candidates submitting fully machine-written CVs** that bypass traditional screening.
 
-CV Guardian addresses both threats in a single analysis pipeline.
+CV Guardian addresses both threats in a single analysis pipeline with a modern, responsive interface.
 
 ---
 
@@ -40,8 +40,8 @@ CV Guardian addresses both threats in a single analysis pipeline.
 | Service | Tech | Port | Role |
 |---------|------|------|------|
 | **Main API** | Node.js / Express | 3000 | Orchestrates analysis, serves UI & API |
-| **Sandbox** | Node.js | 3001 | Isolates file parsing (PDF, DOCX) in a separate process |
-| **NLP Service** | Python / Flask | 5000 | Sentiment analysis via Hugging Face Transformers |
+| **Sandbox** | Node.js | 3001 | Isolates critical file parsing (PDF, DOCX) in a separate secure process |
+| **NLP Service** | Python / Flask | 5000 | Advanced prompt injection detection using DeBERTa v3 model |
 | **Database** | MongoDB | 27017 | Persists analysis reports |
 
 ---
@@ -51,9 +51,9 @@ CV Guardian addresses both threats in a single analysis pipeline.
 | # | Check | Severity | What It Detects |
 |---|-------|----------|-----------------|
 | 1 | **Page Count Policy** | medium | Documents exceeding page limits |
-| 2 | **Suspicious URLs** | high/critical | Malware domains, URL shorteners, executable links |
+| 2 | **Suspicious URLs** | high/critical | Malware verification via **VirusTotal Intelligence**, executable links |
 | 3 | **Content Heuristics** | medium | Social engineering phrases ("enable macros", "click here") |
-| 4 | **Injection Detection** | critical | SQL injection, XSS, command injection, prompt injection |
+| 4 | **Injection Detection** | critical | SQLi, XSS, Command Injection, Prompt Injection (via specialized DeBERTa model) |
 | 5 | **Obfuscation Patterns** | high | Hex-encoded streams, suspicious PDF operators |
 | 6 | **Metadata Anomalies** | medium/critical | Missing creator, malware tool signatures, future dates |
 | 7 | **JavaScript Detection** | critical | `/JS`, `/JavaScript`, `/OpenAction` in PDF structure |
@@ -115,7 +115,8 @@ The-CV-Guardian-/
 │   ├── services/
 │   │   ├── fileAnalyzer.js     # Core: 11 security checks + AI scoring (1100+ lines)
 │   │   ├── nlpService.js       # NLP service client
-│   │   └── sandboxService.js   # Sandbox service client
+│   │   ├── sandboxService.js   # Sandbox service client
+│   │   └── virusTotalService.js # VirusTotal API Integration
 │   └── utils/
 │       └── helpers.js
 │
@@ -124,7 +125,7 @@ The-CV-Guardian-/
 │   └── package.json
 │
 ├── nlp_service/                # Python NLP microservice
-│   ├── app.py                  # Flask server on :5000 (Hugging Face sentiment)
+│   ├── app.py                  # Flask server on :5000 (DeBERTa v3 Prompt Injection)
 │   └── requirements.txt
 │
 ├── public/                     # Frontend UI
@@ -223,19 +224,11 @@ Upload a file for analysis.
   "aiScore": {
     "dimensions": {
       "1.1_buzzword_density": 4,
-      "1.2_sentence_uniformity": 2,
-      "1.3_friction_absence": 5,
-      "2.1_tool_specificity": 5,
-      "2.2_scale_realism": 4,
-      "2.3_timeline_plausibility": 0,
-      "4.0_stylometric": 2,
-      "3.0_cross_consistency": null
+      "total": 22,
+      "riskLabel": "Mixed / Assisted"
     },
-    "total": 22,
-    "riskLabel": "Mixed / Assisted"
-  },
-  "recommendations": ["🤖 This CV appears to be bot-generated..."],
-  "metadata": { ... }
+    ...
+  }
 }
 ```
 
@@ -272,10 +265,10 @@ Environment variables (or defaults in `src/config/index.js`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | 3000 | Main API port |
-| `MONGO_URI` | `mongodb://localhost:27017/cv-guardian` | MongoDB connection string |
+| `MONGO_URI` | `mongodb://localhost:27017/cv-guardian` | MongoDB |
 | `NLP_SERVICE_URL` | `http://localhost:5000` | NLP service endpoint |
-| `SANDBOX_URL` | `http://localhost:3001` | Sandbox service endpoint |
-| `MAX_FILE_SIZE` | 15 MB | Maximum upload size |
+| `SANDBOX_URL` | `http://localhost:3001` | Sandbox endpoint |
+| `MAX_FILE_SIZE` | 15 MB | Upload limit |
 
 ---
 

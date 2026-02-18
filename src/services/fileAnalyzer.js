@@ -1128,10 +1128,22 @@ class FileAnalyzer {
 
             if (analysis && Array.isArray(analysis) && analysis.length > 0) {
                 const result = analysis[0];
-                // Store as metadata only — generic sentiment models are not calibrated
-                // for CV/resume text and produce false positives on professional language
-                report.metadata.sentiment = result.label;
-                report.metadata.sentimentScore = result.score;
+
+                // Store raw metadata
+                report.metadata.nlp_label = result.label;
+                report.metadata.nlp_score = result.score;
+
+                // Check for Prompt Injection (protectai/deberta-v3-base-prompt-injection)
+                // Model typically returns 'INJECTION' or 'SAFE' (or 'LABEL_1' for injection in some versions, but 'INJECTION' is standard for the pipeline)
+                if ((result.label === 'INJECTION' || result.label === 'LABEL_1') && result.score > 0.9) {
+                    report.findings.push({
+                        check: 'Injection Detection',
+                        severity: 'critical',
+                        message: `AI Model detected high-confidence prompt injection (Confidence: ${(result.score * 100).toFixed(1)}%)`,
+                        category: 'AI NLP Analysis'
+                    });
+                    report.score += 50; // Major penalty for confirmed injection
+                }
             }
         } catch (err) {
             // NLP service unavailable — skip silently
